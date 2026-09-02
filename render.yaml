@@ -1,9 +1,0 @@
-services:
-  - type: web
-    name: discord-music-bot
-    runtime: docker
-    plan: free
-    healthCheckPath: /
-    envVars:
-      - key: DISCORD_TOKEN
-        sync: false # set this in the Render dashboard, never commit it

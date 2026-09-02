@@ -1,0 +1,31 @@
+name: Deploy to Oracle VM
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch: {} # allows manual "Run workflow" from the Actions tab
+
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.ORACLE_HOST }}
+          username: ubuntu
+          key: ${{ secrets.ORACLE_SSH_KEY }}
+          script_stop: true
+          # The VM needs one-time setup first: docker installed, repo cloned
+          # at ~/bot, and the token in ~/bot.env (see README)
+          script: |
+            cd ~/bot
+            git pull --ff-only
+            docker build -t music-bot .
+            docker rm -f music-bot 2>/dev/null || true
+            docker run -d --name music-bot --restart unless-stopped --env-file ~/bot.env music-bot
+            docker image prune -f

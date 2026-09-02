@@ -29,16 +29,37 @@ uv sync
 uv run discord-music-bot
 ```
 
-## Deploy to Render
+## Deployment (Oracle Cloud VM + GitHub Actions)
 
-1. Push this repo to GitHub.
-2. On [Render](https://render.com), click **New → Blueprint** and select the repo — it picks up `render.yaml` automatically.
-3. In the service's **Environment** settings, add `DISCORD_TOKEN` with your bot token.
-4. Deploy. The Dockerfile installs FFmpeg and runs the bot; a small HTTP health server binds to `PORT` so Render's free web service stays happy.
+The bot runs in Docker on an Oracle Cloud Always Free ARM VM. Every push to
+`master` triggers `.github/workflows/deploy.yml`, which SSHes into the VM,
+pulls, rebuilds and restarts the container.
 
-> **Keep-alive:** Render's free tier spins the service down after ~15 minutes without inbound traffic. The bot handles this itself: it pings its own public URL (from Render's `RENDER_EXTERNAL_URL` env var) every few minutes, so no external pinger is needed. Set `KEEP_ALIVE_URL` to override the ping target.
+### One-time VM setup
 
-> **Audio quality note:** Render's free instances get ~0.1 CPU. The bot minimizes CPU use (Opus encoding happens inside FFmpeg, progressive streams instead of HLS), but if playback still stutters under load, a paid instance is the fix.
+```sh
+ssh ubuntu@<VM_PUBLIC_IP>
+sudo apt update && sudo apt install -y docker.io git
+sudo usermod -aG docker ubuntu
+exit  # log back in so the docker group applies
+
+ssh ubuntu@<VM_PUBLIC_IP>
+git clone https://github.com/Ershivnandan/discord-music-bot.git ~/bot
+echo 'DISCORD_TOKEN=<your-bot-token>' > ~/bot.env
+cd ~/bot && docker build -t music-bot . && \
+  docker run -d --name music-bot --restart unless-stopped --env-file ~/bot.env music-bot
+```
+
+### One-time GitHub setup
+
+In the repo: **Settings → Secrets and variables → Actions → New repository secret**
+
+| Secret | Value |
+| --- | --- |
+| `ORACLE_HOST` | The VM's public IP |
+| `ORACLE_SSH_KEY` | The **private** SSH key for the VM (the whole file, including BEGIN/END lines) |
+
+After that, `git push` = auto deploy. Check progress in the repo's **Actions** tab; logs on the VM with `docker logs -f music-bot`.
 
 ## Security
 

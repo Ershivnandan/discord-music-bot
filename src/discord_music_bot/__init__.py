@@ -2,15 +2,81 @@ import asyncio
 import os
 import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import aiohttp
 import discord
 import yt_dlp
+from discord.enums import SpeakingState
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def _patch_audio_player():
+    """Stop discord.py's fast-forward bursts after a stall.
+
+    The stock AudioPlayer._do_run schedules packet N at start + N*20ms. If the
+    thread stalls (CPU starvation on Render's 0.1-CPU instance), every packet
+    afterwards is "late", so it sends them back-to-back to catch up — heard as
+    a few seconds of 2x-speed audio. This copy of the loop (discord.py 2.7.1)
+    resyncs the clock after a big stall instead, trading the burst for a brief
+    gap, which sounds far less jarring.
+    """
+    max_lag = 0.2  # seconds behind schedule before we resync instead of burst
+
+    def _do_run(self):
+        self.loops = 0
+        self._start = time.perf_counter()
+
+        client = self.client
+        play_audio = client.send_audio_packet
+        self._speak(SpeakingState.voice)
+
+        while not self._end.is_set():
+            if not self._resumed.is_set():
+                self.send_silence()
+                self._resumed.wait()
+                continue
+
+            data = self.source.read()
+
+            if not data:
+                if self._current_error is None:
+                    source_error = getattr(self.source, "_current_error", None)
+                    if source_error:
+                        self._current_error = source_error
+                self.stop()
+                break
+
+            if not client.is_connected():
+                connected = client.wait_until_connected(client.timeout)
+                if self._end.is_set() or not connected:
+                    return
+                self._speak(SpeakingState.voice)
+                self.loops = 0
+                self._start = time.perf_counter()
+
+            play_audio(data, encode=not self.source.is_opus())
+            self.loops += 1
+            next_time = self._start + self.DELAY * self.loops
+            now = time.perf_counter()
+            if now - next_time > max_lag:
+                # fell way behind schedule: drop the backlog, don't burst it
+                self._start += now - next_time
+                next_time = now
+            delay = max(0, self.DELAY + (next_time - now))
+            time.sleep(delay)
+
+        if client.is_connected():
+            self.send_silence()
+
+    discord.player.AudioPlayer._do_run = _do_run
+
+
+_patch_audio_player()
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -30,6 +96,9 @@ YDL_OPTIONS = {
     # SoundCloud search: unlike YouTube, it doesn't block server IPs
     "default_search": "scsearch",
     "outtmpl": os.path.join(DOWNLOAD_DIR, "%(id)s.%(ext)s"),
+    # Throttle downloads so queueing a song mid-playback doesn't starve the
+    # tiny instance's CPU/network and stall the audio thread
+    "ratelimit": 1_500_000,
 }
 
 # ffmpeg's atempo filter caps at 2.0 per stage, so 3x chains two stages
@@ -83,7 +152,7 @@ async def on_ready():
 
 
 COMMANDS_MESSAGE = (
-    "🎵 **I'm here! Commands:**\n"
+    "🎵 **I'm here! Commands:**\n\n"
     "`!play <song or URL>` — play a song, or queue it if one is playing\n"
     "`!next` (or `!skip`) — next song\n"
     "`!prev` — previous song\n"
