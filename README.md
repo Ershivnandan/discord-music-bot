@@ -8,7 +8,9 @@ A simple, lightweight Discord music bot using discord.py + yt-dlp. Plays audio f
 | --- | --- |
 | `!join` | Join your voice channel |
 | `!play <song or URL>` | Play / queue a song (searches SoundCloud) |
-| `!skip` | Skip the current song |
+| `!next` / `!skip` | Next song |
+| `!prev` | Previous song |
+| `!speed 1\|2\|3` | Playback speed (1x / 2x / 3x); applies immediately |
 | `!pause` | Pause playback |
 | `!resume` | Resume playback |
 | `!leave` | Clear queue and disconnect |

@@ -1,5 +1,6 @@
 import asyncio
 import os
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -15,26 +16,47 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# Songs are fully downloaded before playing: streaming over the network on
+# Render's tiny free instance causes crackling/lag whenever the connection
+# jitters, while playing a local file is rock solid.
+DOWNLOAD_DIR = os.path.join(tempfile.gettempdir(), "discord-music")
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
 YDL_OPTIONS = {
-    # Prefer progressive (non-HLS) streams: they buffer better and support
-    # ffmpeg's reconnect flags, which HLS doesn't
+    # Prefer progressive (non-HLS) streams: single small file, fast download
     "format": "bestaudio[protocol!*=m3u8]/bestaudio/best",
     "noplaylist": True,
     "quiet": True,
     # SoundCloud search: unlike YouTube, it doesn't block server IPs
     "default_search": "scsearch",
+    "outtmpl": os.path.join(DOWNLOAD_DIR, "%(id)s.%(ext)s"),
 }
 
-FFMPEG_OPTIONS = {
-    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
-    "options": "-vn",
+# ffmpeg's atempo filter caps at 2.0 per stage, so 3x chains two stages
+SPEED_FILTERS = {
+    1: "-vn",
+    2: "-vn -filter:a atempo=2.0",
+    3: "-vn -filter:a atempo=2.0,atempo=1.5",
 }
 
-queues = {}  # guild_id -> list of (title, url)
+
+class GuildPlayer:
+    """Per-guild playback state: full session playlist + current position."""
+
+    def __init__(self):
+        self.playlist = []  # list of (title, file path); kept for !prev
+        self.index = -1  # position of the currently playing song
+        self.speed = 1
+        # Bumped on every (re)start; stale after-callbacks see a mismatch
+        # and skip auto-advancing, so manual next/prev/speed don't double-play
+        self.generation = 0
 
 
-def get_queue(guild_id):
-    return queues.setdefault(guild_id, [])
+players = {}  # guild_id -> GuildPlayer
+
+
+def get_player(guild_id) -> GuildPlayer:
+    return players.setdefault(guild_id, GuildPlayer())
 
 
 # Render sets RENDER_EXTERNAL_URL automatically; pinging our own public URL
@@ -63,7 +85,9 @@ async def on_ready():
 COMMANDS_MESSAGE = (
     "🎵 **I'm here! Commands:**\n"
     "`!play <song or URL>` — play a song, or queue it if one is playing\n"
-    "`!skip` — skip the current song\n"
+    "`!next` (or `!skip`) — next song\n"
+    "`!prev` — previous song\n"
+    "`!speed 1|2|3` — playback speed (1x / 2x / 3x)\n"
     "`!pause` / `!resume` — pause / resume playback\n"
     "`!leave` — clear the queue and disconnect\n"
     "`!join` — pull me into your voice channel"
@@ -83,12 +107,50 @@ async def join(ctx):
         await ctx.voice_client.move_to(channel)
 
 
-def extract_info(search: str):
+def download_song(search: str):
     with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
-        info = ydl.extract_info(search, download=False)
+        info = ydl.extract_info(search, download=True)
         if "entries" in info:  # came from a search
             info = info["entries"][0]
-        return info.get("title", "Unknown title"), info["url"]
+        return info.get("title", "Unknown title"), ydl.prepare_filename(info)
+
+
+async def play_index(ctx, index: int):
+    """Start playing playlist[index], stopping whatever is on now."""
+    player = get_player(ctx.guild.id)
+    if not 0 <= index < len(player.playlist):
+        return
+    player.index = index
+    player.generation += 1
+    generation = player.generation
+
+    voice = ctx.voice_client
+    if voice.is_playing() or voice.is_paused():
+        voice.stop()
+
+    title, path = player.playlist[index]
+    source = discord.FFmpegOpusAudio(path, options=SPEED_FILTERS[player.speed])
+
+    def after_playing(error):
+        if error:
+            print(f"Playback error: {error}")
+        if generation != player.generation:
+            return  # superseded by a manual next/prev/speed restart
+        fut = asyncio.run_coroutine_threadsafe(advance(ctx), bot.loop)
+        try:
+            fut.result()
+        except Exception as e:
+            print(e)
+
+    voice.play(source, after=after_playing)
+    speed_note = f" ({player.speed}x)" if player.speed != 1 else ""
+    await ctx.send(f"Now playing: **{title}**{speed_note}")
+
+
+async def advance(ctx):
+    player = get_player(ctx.guild.id)
+    if player.index + 1 < len(player.playlist):
+        await play_index(ctx, player.index + 1)
 
 
 @bot.command(name="play")
@@ -103,48 +165,64 @@ async def play(ctx, *, search: str):
     async with ctx.typing():
         try:
             # yt-dlp is blocking; run it off the event loop
-            title, url = await asyncio.to_thread(extract_info, search)
+            title, path = await asyncio.to_thread(download_song, search)
         except yt_dlp.utils.DownloadError as e:
             await ctx.send(f"Couldn't fetch that song: {str(e)[:200]}")
             return
 
-    queue = get_queue(ctx.guild.id)
-    queue.append((title, url))
-    await ctx.send(f"Queued: **{title}**")
+    player = get_player(ctx.guild.id)
+    player.playlist.append((title, path))
 
-    if not ctx.voice_client.is_playing():
-        await play_next(ctx)
+    if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
+        await ctx.send(f"Queued: **{title}**")
+    else:
+        await play_index(ctx, len(player.playlist) - 1)
 
 
-async def play_next(ctx):
-    queue = get_queue(ctx.guild.id)
-    if not queue:
+@bot.command(name="next", aliases=["skip"])
+async def next_song(ctx):
+    if ctx.voice_client is None:
         return
-
-    title, url = queue.pop(0)
-    # FFmpegOpusAudio encodes opus inside ffmpeg (C), so Python doesn't
-    # re-encode PCM — much lighter on Render's 0.1-CPU free instance
-    source = await discord.FFmpegOpusAudio.from_probe(url, **FFMPEG_OPTIONS)
-
-    def after_playing(error):
-        if error:
-            print(f"Playback error: {error}")
-        coro = play_next(ctx)
-        fut = asyncio.run_coroutine_threadsafe(coro, bot.loop)
-        try:
-            fut.result()
-        except Exception as e:
-            print(e)
-
-    ctx.voice_client.play(source, after=after_playing)
-    await ctx.send(f"Now playing: **{title}**")
+    player = get_player(ctx.guild.id)
+    if player.index + 1 < len(player.playlist):
+        await play_index(ctx, player.index + 1)
+    else:
+        await ctx.send("No next song in the queue.")
 
 
-@bot.command(name="skip")
-async def skip(ctx):
-    if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.stop()  # triggers after_playing -> play_next
-        await ctx.send("Skipped.")
+@bot.command(name="prev")
+async def prev_song(ctx):
+    if ctx.voice_client is None:
+        return
+    player = get_player(ctx.guild.id)
+    if player.index > 0:
+        await play_index(ctx, player.index - 1)
+    else:
+        await ctx.send("No previous song.")
+
+
+@bot.command(name="speed")
+async def speed(ctx, value: int):
+    if value not in SPEED_FILTERS:
+        await ctx.send("Speed can be 1, 2 or 3 (e.g. `!speed 2`).")
+        return
+    player = get_player(ctx.guild.id)
+    if player.speed == value:
+        await ctx.send(f"Already at {value}x.")
+        return
+    player.speed = value
+    await ctx.send(f"Speed set to **{value}x**.")
+    # Apply immediately by restarting the current song at the new speed
+    if ctx.voice_client and (ctx.voice_client.is_playing() or ctx.voice_client.is_paused()):
+        await play_index(ctx, player.index)
+
+
+@speed.error
+async def speed_error(ctx, error):
+    if isinstance(error, (commands.BadArgument, commands.MissingRequiredArgument)):
+        await ctx.send("Usage: `!speed 1`, `!speed 2` or `!speed 3`.")
+    else:
+        raise error
 
 
 @bot.command(name="pause")
@@ -162,7 +240,14 @@ async def resume(ctx):
 @bot.command(name="leave")
 async def leave(ctx):
     if ctx.voice_client:
-        queues[ctx.guild.id] = []
+        player = players.pop(ctx.guild.id, None)
+        if player:
+            player.generation += 1  # cancel any pending auto-advance
+            for _, path in player.playlist:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
         await ctx.voice_client.disconnect()
 
 
