@@ -22,6 +22,14 @@ YDL_OPTIONS = {
     "default_search": "ytsearch",  # allows searching by song name, not just URL
 }
 
+# YouTube blocks datacenter IPs (like Render's) with a "sign in to confirm
+# you're not a bot" check; cookies from a logged-in browser bypass it.
+# On Render, upload cookies.txt as a Secret File (they land in /etc/secrets/).
+COOKIES_FILE = os.environ.get("COOKIES_FILE", "/etc/secrets/cookies.txt")
+if os.path.exists(COOKIES_FILE):
+    YDL_OPTIONS["cookiefile"] = COOKIES_FILE
+    print(f"Using YouTube cookies from {COOKIES_FILE}")
+
 FFMPEG_OPTIONS = {
     "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
     "options": "-vn",
@@ -86,8 +94,19 @@ async def play(ctx, *, search: str):
         await ctx.author.voice.channel.connect()
 
     async with ctx.typing():
-        # yt-dlp is blocking; run it off the event loop
-        title, url = await asyncio.to_thread(extract_info, search)
+        try:
+            # yt-dlp is blocking; run it off the event loop
+            title, url = await asyncio.to_thread(extract_info, search)
+        except yt_dlp.utils.DownloadError as e:
+            msg = str(e)
+            if "Sign in to confirm" in msg:
+                await ctx.send(
+                    "YouTube is blocking this server's IP. "
+                    "The bot needs a cookies.txt file to get around it (ask the bot owner)."
+                )
+            else:
+                await ctx.send(f"Couldn't fetch that song: {msg[:200]}")
+            return
 
     queue = get_queue(ctx.guild.id)
     queue.append((title, url))

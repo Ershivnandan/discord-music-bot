@@ -4,6 +4,9 @@ FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
+# Deno is the JS runtime yt-dlp uses to solve YouTube's JS challenges
+COPY --from=denoland/deno:bin /deno /usr/local/bin/deno
+
 WORKDIR /app
 
 # Install dependencies first for better layer caching
