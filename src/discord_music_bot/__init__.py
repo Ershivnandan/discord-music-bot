@@ -3,6 +3,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import aiohttp
@@ -63,12 +64,24 @@ async def keep_alive():
         print(f"Keep-alive ping failed: {e}")
 
 
+POT_PROVIDER_URL = os.environ.get("POT_PROVIDER_URL", "http://127.0.0.1:4416")
+
+
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
     if KEEP_ALIVE_URL and not keep_alive.is_running():
         keep_alive.start()
         print(f"Keep-alive pings started for {KEEP_ALIVE_URL}")
+    # Confirm the bgutil PO-token server is up so failures show in the logs
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{POT_PROVIDER_URL}/ping", timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                print(f"POT provider check: HTTP {resp.status} {await resp.text()}")
+    except Exception as e:
+        print(f"POT provider NOT reachable at {POT_PROVIDER_URL}: {e}")
 
 
 @bot.command(name="join")
@@ -91,28 +104,52 @@ def extract_info(search: str):
         return info.get("title", "Unknown title"), info["url"]
 
 
+# Set MUSIC_SOURCE=soundcloud to skip YouTube entirely. Otherwise, after one
+# YouTube IP-block the bot goes straight to SoundCloud for a while instead of
+# wasting 10-15s retrying YouTube on every song.
+DEFAULT_SOURCE = os.environ.get("MUSIC_SOURCE", "youtube").lower()
+YOUTUBE_BLOCK_COOLDOWN = 30 * 60  # seconds
+youtube_blocked_until = 0.0
+
+
 @bot.command(name="play")
 async def play(ctx, *, search: str):
+    global youtube_blocked_until
+
     if ctx.voice_client is None:
         if ctx.author.voice is None:
             await ctx.send("Join a voice channel first.")
             return
         await ctx.author.voice.channel.connect()
 
+    is_direct_url = search.startswith(("http://", "https://"))
+    query = search
+    if (
+        not is_direct_url
+        and not search.startswith("scsearch")
+        and (DEFAULT_SOURCE == "soundcloud" or time.time() < youtube_blocked_until)
+    ):
+        query = f"scsearch:{search}"
+
     async with ctx.typing():
         try:
             # yt-dlp is blocking; run it off the event loop
-            title, url = await asyncio.to_thread(extract_info, search)
+            title, url = await asyncio.to_thread(extract_info, query)
         except yt_dlp.utils.DownloadError as e:
             msg = str(e)
-            if "Sign in to confirm" in msg:
-                await ctx.send(
-                    "YouTube is blocking this server's IP. "
-                    "The bot needs a cookies.txt file to get around it (ask the bot owner)."
-                )
+            if "Sign in to confirm" in msg and not is_direct_url:
+                # YouTube is blocking this server's IP; go straight to
+                # SoundCloud for the next songs instead of retrying every time
+                youtube_blocked_until = time.time() + YOUTUBE_BLOCK_COOLDOWN
+                await ctx.send("YouTube blocked the request — trying SoundCloud instead...")
+                try:
+                    title, url = await asyncio.to_thread(extract_info, f"scsearch:{search}")
+                except yt_dlp.utils.DownloadError as e2:
+                    await ctx.send(f"SoundCloud couldn't find it either: {str(e2)[:200]}")
+                    return
             else:
                 await ctx.send(f"Couldn't fetch that song: {msg[:200]}")
-            return
+                return
 
     queue = get_queue(ctx.guild.id)
     queue.append((title, url))
@@ -142,6 +179,15 @@ async def play_next(ctx):
 
     ctx.voice_client.play(source, after=after_playing)
     await ctx.send(f"Now playing: **{title}**")
+
+
+@bot.command(name="playsc")
+async def playsc(ctx, *, search: str):
+    """Search SoundCloud directly, skipping YouTube entirely."""
+    if search.startswith(("http://", "https://")):
+        await ctx.invoke(bot.get_command("play"), search=search)
+    else:
+        await ctx.invoke(bot.get_command("play"), search=f"scsearch:{search}")
 
 
 @bot.command(name="skip")
