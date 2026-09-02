@@ -60,6 +60,16 @@ async def on_ready():
         print(f"Keep-alive pings started for {KEEP_ALIVE_URL}")
 
 
+COMMANDS_MESSAGE = (
+    "🎵 **I'm here! Commands:**\n"
+    "`!play <song or URL>` — play a song, or queue it if one is playing\n"
+    "`!skip` — skip the current song\n"
+    "`!pause` / `!resume` — pause / resume playback\n"
+    "`!leave` — clear the queue and disconnect\n"
+    "`!join` — pull me into your voice channel"
+)
+
+
 @bot.command(name="join")
 async def join(ctx):
     if ctx.author.voice is None:
@@ -68,6 +78,7 @@ async def join(ctx):
     channel = ctx.author.voice.channel
     if ctx.voice_client is None:
         await channel.connect()
+        await ctx.send(COMMANDS_MESSAGE)
     else:
         await ctx.voice_client.move_to(channel)
 
@@ -87,6 +98,7 @@ async def play(ctx, *, search: str):
             await ctx.send("Join a voice channel first.")
             return
         await ctx.author.voice.channel.connect()
+        await ctx.send(COMMANDS_MESSAGE)
 
     async with ctx.typing():
         try:
