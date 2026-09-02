@@ -1,9 +1,6 @@
 import asyncio
 import os
-import shutil
-import tempfile
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import aiohttp
@@ -19,23 +16,14 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 YDL_OPTIONS = {
-    "format": "bestaudio/best",
+    # Prefer progressive (non-HLS) streams: they buffer better and support
+    # ffmpeg's reconnect flags, which HLS doesn't
+    "format": "bestaudio[protocol!*=m3u8]/bestaudio/best",
     "noplaylist": True,
     "quiet": True,
-    "default_search": "ytsearch",  # allows searching by song name, not just URL
+    # SoundCloud search: unlike YouTube, it doesn't block server IPs
+    "default_search": "scsearch",
 }
-
-# YouTube blocks datacenter IPs (like Render's) with a "sign in to confirm
-# you're not a bot" check; cookies from a logged-in browser bypass it.
-# On Render, upload cookies.txt as a Secret File (they land in /etc/secrets/).
-# Secret files are read-only and yt-dlp writes refreshed cookies back on
-# close, so work from a copy in /tmp.
-COOKIES_FILE = os.environ.get("COOKIES_FILE", "/etc/secrets/cookies.txt")
-if os.path.exists(COOKIES_FILE):
-    writable_cookies = os.path.join(tempfile.gettempdir(), "cookies.txt")
-    shutil.copyfile(COOKIES_FILE, writable_cookies)
-    YDL_OPTIONS["cookiefile"] = writable_cookies
-    print(f"Using YouTube cookies from {COOKIES_FILE} (copied to {writable_cookies})")
 
 FFMPEG_OPTIONS = {
     "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
@@ -64,24 +52,12 @@ async def keep_alive():
         print(f"Keep-alive ping failed: {e}")
 
 
-POT_PROVIDER_URL = os.environ.get("POT_PROVIDER_URL", "http://127.0.0.1:4416")
-
-
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
     if KEEP_ALIVE_URL and not keep_alive.is_running():
         keep_alive.start()
         print(f"Keep-alive pings started for {KEEP_ALIVE_URL}")
-    # Confirm the bgutil PO-token server is up so failures show in the logs
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{POT_PROVIDER_URL}/ping", timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                print(f"POT provider check: HTTP {resp.status} {await resp.text()}")
-    except Exception as e:
-        print(f"POT provider NOT reachable at {POT_PROVIDER_URL}: {e}")
 
 
 @bot.command(name="join")
@@ -104,52 +80,21 @@ def extract_info(search: str):
         return info.get("title", "Unknown title"), info["url"]
 
 
-# Set MUSIC_SOURCE=soundcloud to skip YouTube entirely. Otherwise, after one
-# YouTube IP-block the bot goes straight to SoundCloud for a while instead of
-# wasting 10-15s retrying YouTube on every song.
-DEFAULT_SOURCE = os.environ.get("MUSIC_SOURCE", "youtube").lower()
-YOUTUBE_BLOCK_COOLDOWN = 30 * 60  # seconds
-youtube_blocked_until = 0.0
-
-
 @bot.command(name="play")
 async def play(ctx, *, search: str):
-    global youtube_blocked_until
-
     if ctx.voice_client is None:
         if ctx.author.voice is None:
             await ctx.send("Join a voice channel first.")
             return
         await ctx.author.voice.channel.connect()
 
-    is_direct_url = search.startswith(("http://", "https://"))
-    query = search
-    if (
-        not is_direct_url
-        and not search.startswith("scsearch")
-        and (DEFAULT_SOURCE == "soundcloud" or time.time() < youtube_blocked_until)
-    ):
-        query = f"scsearch:{search}"
-
     async with ctx.typing():
         try:
             # yt-dlp is blocking; run it off the event loop
-            title, url = await asyncio.to_thread(extract_info, query)
+            title, url = await asyncio.to_thread(extract_info, search)
         except yt_dlp.utils.DownloadError as e:
-            msg = str(e)
-            if "Sign in to confirm" in msg and not is_direct_url:
-                # YouTube is blocking this server's IP; go straight to
-                # SoundCloud for the next songs instead of retrying every time
-                youtube_blocked_until = time.time() + YOUTUBE_BLOCK_COOLDOWN
-                await ctx.send("YouTube blocked the request — trying SoundCloud instead...")
-                try:
-                    title, url = await asyncio.to_thread(extract_info, f"scsearch:{search}")
-                except yt_dlp.utils.DownloadError as e2:
-                    await ctx.send(f"SoundCloud couldn't find it either: {str(e2)[:200]}")
-                    return
-            else:
-                await ctx.send(f"Couldn't fetch that song: {msg[:200]}")
-                return
+            await ctx.send(f"Couldn't fetch that song: {str(e)[:200]}")
+            return
 
     queue = get_queue(ctx.guild.id)
     queue.append((title, url))
@@ -165,7 +110,9 @@ async def play_next(ctx):
         return
 
     title, url = queue.pop(0)
-    source = discord.FFmpegPCMAudio(url, **FFMPEG_OPTIONS)
+    # FFmpegOpusAudio encodes opus inside ffmpeg (C), so Python doesn't
+    # re-encode PCM — much lighter on Render's 0.1-CPU free instance
+    source = await discord.FFmpegOpusAudio.from_probe(url, **FFMPEG_OPTIONS)
 
     def after_playing(error):
         if error:
@@ -179,15 +126,6 @@ async def play_next(ctx):
 
     ctx.voice_client.play(source, after=after_playing)
     await ctx.send(f"Now playing: **{title}**")
-
-
-@bot.command(name="playsc")
-async def playsc(ctx, *, search: str):
-    """Search SoundCloud directly, skipping YouTube entirely."""
-    if search.startswith(("http://", "https://")):
-        await ctx.invoke(bot.get_command("play"), search=search)
-    else:
-        await ctx.invoke(bot.get_command("play"), search=f"scsearch:{search}")
 
 
 @bot.command(name="skip")

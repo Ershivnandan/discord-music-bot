@@ -1,17 +1,21 @@
 # Discord Music Bot
 
-A simple Discord music bot using discord.py + yt-dlp. Plays audio from YouTube by URL or song name.
+A simple, lightweight Discord music bot using discord.py + yt-dlp. Plays audio from SoundCloud by song name (or any direct/supported URL).
 
 ## Commands
 
 | Command | Description |
 | --- | --- |
 | `!join` | Join your voice channel |
-| `!play <song or URL>` | Play / queue a song |
+| `!play <song or URL>` | Play / queue a song (searches SoundCloud) |
 | `!skip` | Skip the current song |
 | `!pause` | Pause playback |
 | `!resume` | Resume playback |
 | `!leave` | Clear queue and disconnect |
+
+## Why SoundCloud and not YouTube?
+
+YouTube aggressively blocks datacenter IPs (like Render's) with "sign in to confirm you're not a bot" checks; working around it needs PO-token servers and browser cookies that expire. SoundCloud doesn't block server IPs, so the bot stays small and reliable.
 
 ## Local setup
 
@@ -26,22 +30,13 @@ uv run discord-music-bot
 ## Deploy to Render
 
 1. Push this repo to GitHub.
-2. On [Render](https://render.com), click **New → Blueprint** and select the repo — it picks up `render.yaml` automatically. (Or create a **Web Service** manually with runtime **Docker**.)
+2. On [Render](https://render.com), click **New → Blueprint** and select the repo — it picks up `render.yaml` automatically.
 3. In the service's **Environment** settings, add `DISCORD_TOKEN` with your bot token.
 4. Deploy. The Dockerfile installs FFmpeg and runs the bot; a small HTTP health server binds to `PORT` so Render's free web service stays happy.
 
-> **Keep-alive:** Render's free tier spins the service down after ~15 minutes without inbound traffic. The bot handles this itself: it pings its own public URL (from Render's `RENDER_EXTERNAL_URL` env var) every 10 minutes, so no external pinger is needed. As a backup you can still point UptimeRobot / cron-job.org at the service URL, or set `KEEP_ALIVE_URL` to override the ping target.
+> **Keep-alive:** Render's free tier spins the service down after ~15 minutes without inbound traffic. The bot handles this itself: it pings its own public URL (from Render's `RENDER_EXTERNAL_URL` env var) every few minutes, so no external pinger is needed. Set `KEEP_ALIVE_URL` to override the ping target.
 
-## YouTube blocking ("Sign in to confirm you're not a bot")
-
-YouTube challenges datacenter IPs like Render's. Two layers handle this:
-
-1. **PO tokens (automatic):** the Docker image runs the [bgutil PO-token provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider) alongside the bot; yt-dlp's plugin picks it up at `127.0.0.1:4416` with zero config. This is usually enough — try without cookies first. When updating, keep the pip plugin version (pyproject) and the server version (Dockerfile `--branch` tag) identical.
-2. **Cookies (fallback, optional):** if YouTube still blocks, upload a `cookies.txt` as a Render Secret File. **Export them the right way or they die after a few requests:**
-   - Open a **private/incognito window**, log in to YouTube (a throwaway account is safer)
-   - Visit `https://www.youtube.com/robots.txt` in that same tab
-   - Export cookies with a browser extension (e.g. "Get cookies.txt LOCALLY")
-   - **Close the incognito window immediately** and never log into that account in a normal browser tab — otherwise YouTube rotates the cookies and the exported file stops working
+> **Audio quality note:** Render's free instances get ~0.1 CPU. The bot minimizes CPU use (Opus encoding happens inside FFmpeg, progressive streams instead of HLS), but if playback still stutters under load, a paid instance is the fix.
 
 ## Security
 
