@@ -1,5 +1,7 @@
 import asyncio
 import os
+import shutil
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -25,10 +27,14 @@ YDL_OPTIONS = {
 # YouTube blocks datacenter IPs (like Render's) with a "sign in to confirm
 # you're not a bot" check; cookies from a logged-in browser bypass it.
 # On Render, upload cookies.txt as a Secret File (they land in /etc/secrets/).
+# Secret files are read-only and yt-dlp writes refreshed cookies back on
+# close, so work from a copy in /tmp.
 COOKIES_FILE = os.environ.get("COOKIES_FILE", "/etc/secrets/cookies.txt")
 if os.path.exists(COOKIES_FILE):
-    YDL_OPTIONS["cookiefile"] = COOKIES_FILE
-    print(f"Using YouTube cookies from {COOKIES_FILE}")
+    writable_cookies = os.path.join(tempfile.gettempdir(), "cookies.txt")
+    shutil.copyfile(COOKIES_FILE, writable_cookies)
+    YDL_OPTIONS["cookiefile"] = writable_cookies
+    print(f"Using YouTube cookies from {COOKIES_FILE} (copied to {writable_cookies})")
 
 FFMPEG_OPTIONS = {
     "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
