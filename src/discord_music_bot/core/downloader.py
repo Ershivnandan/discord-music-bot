@@ -26,19 +26,23 @@ class SongDownloader:
             return info.get("title", "Unknown title"), ydl.prepare_filename(info)
 
     async def download_async(self, search: str):
+        """Returns (title, path, used_fallback)."""
         try:
             # yt-dlp is blocking; run it off the event loop
-            return await asyncio.to_thread(self.download, search)
-        except yt_dlp.utils.DownloadError:
+            title, path = await asyncio.to_thread(self.download, search)
+            return title, path, False
+        except yt_dlp.utils.DownloadError as e:
             # YouTube bot-checks datacenter IPs. oEmbed still answers from
             # them, so grab the video title and find the song on SoundCloud.
             title = await self._youtube_title(search)
             if title is None:
                 raise
+            print(f"YouTube download failed, falling back to SoundCloud: {str(e)[:300]}")
             # YouTube titles are noisy ("Song | Artist | Cast | Label"); the
             # first couple of segments search much better than the whole thing
             query = " ".join(part.strip() for part in title.split("|")[:2])
-            return await asyncio.to_thread(self.download, f"scsearch:{query[:100]}")
+            title, path = await asyncio.to_thread(self.download, f"scsearch:{query[:100]}")
+            return title, path, True
 
     async def _youtube_title(self, url: str):
         if not YOUTUBE_URL_RE.match(url):

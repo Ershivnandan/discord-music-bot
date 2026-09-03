@@ -36,10 +36,15 @@ class Music(commands.Cog):
 
         async with ctx.typing():
             try:
-                title, path = await self.downloader.download_async(search)
+                title, path, used_fallback = await self.downloader.download_async(search)
             except yt_dlp.utils.DownloadError as e:
                 await ctx.send(f"Couldn't fetch that song: {str(e)[:200]}")
                 return
+
+        if used_fallback:
+            await ctx.send(
+                f"⚠️ YouTube blocked the download — playing the closest SoundCloud match: **{title}**"
+            )
 
         player = self.playback.get_player(ctx.guild.id)
         player.playlist.append((title, path))
