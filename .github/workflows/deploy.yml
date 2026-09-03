@@ -24,7 +24,8 @@ jobs:
           script: |
             cd ~/bot
             git pull --ff-only
-            docker build -t music-bot .
-            docker rm -f music-bot 2>/dev/null || true
-            docker run -d --name music-bot --restart unless-stopped --env-file ~/bot.env music-bot
+            docker compose version >/dev/null 2>&1 || sudo dnf install -y docker-compose-plugin
+            ln -sf ~/bot.env ~/bot/.env
+            docker rm -f music-bot 2>/dev/null || true # old pre-compose container
+            docker compose up -d --build
             docker image prune -f

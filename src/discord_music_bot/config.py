@@ -24,7 +24,21 @@ YDL_OPTIONS = {
     # Throttle downloads so queueing a song mid-playback doesn't starve the
     # tiny instance's CPU/network and stall the audio thread
     "ratelimit": 1_500_000,
+    # PO tokens let YouTube pass the bot-check it gives datacenter IPs.
+    # The bgutil sidecar container generates them (see docker-compose.yml).
+    "extractor_args": {
+        "youtubepot-bgutilhttp": {
+            "base_url": [os.environ.get("POT_PROVIDER_URL", "http://127.0.0.1:4416")]
+        }
+    },
 }
+
+# YouTube bot-checks datacenter IPs, so direct YouTube links fail on the
+# server without logged-in cookies. Export a Netscape-format cookies.txt from
+# a browser and point YTDLP_COOKIES_FILE at it to enable YouTube there.
+_cookies_file = os.environ.get("YTDLP_COOKIES_FILE")
+if _cookies_file and os.path.isfile(_cookies_file):
+    YDL_OPTIONS["cookiefile"] = _cookies_file
 
 # ffmpeg's atempo filter caps at 2.0 per stage, so 3x chains two stages
 SPEED_FILTERS = {

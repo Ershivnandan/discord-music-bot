@@ -1,0 +1,23 @@
+# Run the whole stack on the server with:  docker compose up -d --build
+# DISCORD_TOKEN comes from a .env file next to this compose file.
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POT_PROVIDER_URL: http://pot-provider:4416
+      # Optional extra: mount a cookies.txt and uncomment for logged-in YouTube
+      # YTDLP_COOKIES_FILE: /app/cookies.txt
+    # volumes:
+    #   - ./cookies.txt:/app/cookies.txt:ro
+    ports:
+      - "8080:8080" # health endpoint
+    depends_on:
+      - pot-provider
+
+  # Generates YouTube PO tokens so downloads pass the bot-check that
+  # YouTube gives datacenter IPs. Only reachable from the bot container.
+  pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider
+    restart: unless-stopped

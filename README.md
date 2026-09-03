@@ -15,9 +15,15 @@ A simple, lightweight Discord music bot using discord.py + yt-dlp. Plays audio f
 | `!resume` | Resume playback |
 | `!leave` | Clear queue and disconnect |
 
-## Why SoundCloud and not YouTube?
+## How YouTube playback works on a server
 
-YouTube aggressively blocks datacenter IPs (like Render's) with "sign in to confirm you're not a bot" checks; working around it needs PO-token servers and browser cookies that expire. SoundCloud doesn't block server IPs, so the bot stays small and reliable.
+YouTube blocks datacenter IPs with "sign in to confirm you're not a bot" checks. The bot handles this in three layers:
+
+1. **PO tokens** — the `pot-provider` sidecar container (see `docker-compose.yml`) generates the tokens YouTube wants, so direct YouTube links work from server IPs without an account.
+2. **Cookies (optional)** — set `YTDLP_COOKIES_FILE` to a Netscape-format `cookies.txt` for logged-in access if PO tokens ever stop being enough.
+3. **SoundCloud fallback** — if a YouTube download still fails, the bot looks up the video title via YouTube's oEmbed API (which isn't IP-blocked) and plays the closest SoundCloud match.
+
+Plain-text searches (`!play <song name>`) go straight to SoundCloud, which doesn't block server IPs.
 
 ## Local setup
 
@@ -31,9 +37,10 @@ uv run discord-music-bot
 
 ## Deployment (Oracle Cloud VM + GitHub Actions)
 
-The bot runs in Docker on an Oracle Cloud Always Free ARM VM. Every push to
-`master` triggers `.github/workflows/deploy.yml`, which SSHes into the VM,
-pulls, rebuilds and restarts the container.
+The bot runs in Docker (via `docker compose`, together with the PO-token
+sidecar) on an Oracle Cloud Always Free ARM VM. Every push to `master`
+triggers `.github/workflows/deploy.yml`, which SSHes into the VM, pulls,
+rebuilds and restarts the containers.
 
 ### One-time VM setup (Oracle Linux 9, user `opc`)
 
@@ -41,7 +48,7 @@ pulls, rebuilds and restarts the container.
 ssh opc@<VM_PUBLIC_IP>
 sudo dnf install -y dnf-utils git
 sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-sudo dnf install -y docker-ce docker-ce-cli containerd.io
+sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 sudo systemctl enable --now docker
 sudo usermod -aG docker opc
 exit  # log back in so the docker group applies
@@ -49,8 +56,8 @@ exit  # log back in so the docker group applies
 ssh opc@<VM_PUBLIC_IP>
 git clone https://github.com/Ershivnandan/discord-music-bot.git ~/bot
 echo 'DISCORD_TOKEN=<your-bot-token>' > ~/bot.env
-cd ~/bot && docker build -t music-bot . && \
-  docker run -d --name music-bot --restart unless-stopped --env-file ~/bot.env music-bot
+ln -sf ~/bot.env ~/bot/.env
+cd ~/bot && docker compose up -d --build
 ```
 
 ### One-time GitHub setup
@@ -62,7 +69,7 @@ In the repo: **Settings → Secrets and variables → Actions → New repository
 | `ORACLE_HOST` | The VM's public IP |
 | `ORACLE_SSH_KEY` | The **private** SSH key for the VM (the whole file, including BEGIN/END lines) |
 
-After that, `git push` = auto deploy. Check progress in the repo's **Actions** tab; logs on the VM with `docker logs -f music-bot`.
+After that, `git push` = auto deploy. Check progress in the repo's **Actions** tab; logs on the VM with `docker compose logs -f` (run from `~/bot`).
 
 ## Security
 

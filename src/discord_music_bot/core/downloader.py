@@ -1,10 +1,15 @@
 """Song downloads via yt-dlp."""
 
 import asyncio
+import re
+import urllib.parse
 
+import aiohttp
 import yt_dlp
 
 from ..config import YDL_OPTIONS
+
+YOUTUBE_URL_RE = re.compile(r"https?://(?:www\.|m\.|music\.)?(?:youtube\.com|youtu\.be)/")
 
 
 class SongDownloader:
@@ -21,5 +26,32 @@ class SongDownloader:
             return info.get("title", "Unknown title"), ydl.prepare_filename(info)
 
     async def download_async(self, search: str):
-        # yt-dlp is blocking; run it off the event loop
-        return await asyncio.to_thread(self.download, search)
+        try:
+            # yt-dlp is blocking; run it off the event loop
+            return await asyncio.to_thread(self.download, search)
+        except yt_dlp.utils.DownloadError:
+            # YouTube bot-checks datacenter IPs. oEmbed still answers from
+            # them, so grab the video title and find the song on SoundCloud.
+            title = await self._youtube_title(search)
+            if title is None:
+                raise
+            # YouTube titles are noisy ("Song | Artist | Cast | Label"); the
+            # first couple of segments search much better than the whole thing
+            query = " ".join(part.strip() for part in title.split("|")[:2])
+            return await asyncio.to_thread(self.download, f"scsearch:{query[:100]}")
+
+    async def _youtube_title(self, url: str):
+        if not YOUTUBE_URL_RE.match(url):
+            return None
+        api = "https://www.youtube.com/oembed?" + urllib.parse.urlencode(
+            {"url": url, "format": "json"}
+        )
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(api, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json()
+                    return data.get("title")
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            return None
