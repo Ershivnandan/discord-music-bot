@@ -17,9 +17,8 @@ jobs:
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.ORACLE_HOST }}
-          username: ubuntu
+          username: opc # Oracle Linux default user
           key: ${{ secrets.ORACLE_SSH_KEY }}
-          script_stop: true
           # The VM needs one-time setup first: docker installed, repo cloned
           # at ~/bot, and the token in ~/bot.env (see README)
           script: |

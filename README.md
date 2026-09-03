@@ -35,15 +35,18 @@ The bot runs in Docker on an Oracle Cloud Always Free ARM VM. Every push to
 `master` triggers `.github/workflows/deploy.yml`, which SSHes into the VM,
 pulls, rebuilds and restarts the container.
 
-### One-time VM setup
+### One-time VM setup (Oracle Linux 9, user `opc`)
 
 ```sh
-ssh ubuntu@<VM_PUBLIC_IP>
-sudo apt update && sudo apt install -y docker.io git
-sudo usermod -aG docker ubuntu
+ssh opc@<VM_PUBLIC_IP>
+sudo dnf install -y dnf-utils git
+sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+sudo dnf install -y docker-ce docker-ce-cli containerd.io
+sudo systemctl enable --now docker
+sudo usermod -aG docker opc
 exit  # log back in so the docker group applies
 
-ssh ubuntu@<VM_PUBLIC_IP>
+ssh opc@<VM_PUBLIC_IP>
 git clone https://github.com/Ershivnandan/discord-music-bot.git ~/bot
 echo 'DISCORD_TOKEN=<your-bot-token>' > ~/bot.env
 cd ~/bot && docker build -t music-bot . && \
