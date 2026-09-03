@@ -119,6 +119,8 @@ class GuildPlayer:
         # Bumped on every (re)start; stale after-callbacks see a mismatch
         # and skip auto-advancing, so manual next/prev/speed don't double-play
         self.generation = 0
+        self.message = None  # the player-card message with the buttons
+        self.ctx = None  # last command context, used by button callbacks
 
 
 players = {}  # guild_id -> GuildPlayer
@@ -126,6 +128,173 @@ players = {}  # guild_id -> GuildPlayer
 
 def get_player(guild_id) -> GuildPlayer:
     return players.setdefault(guild_id, GuildPlayer())
+
+
+def build_embed(player: GuildPlayer, guild) -> discord.Embed:
+    voice = guild.voice_client
+    if 0 <= player.index < len(player.playlist):
+        title = player.playlist[player.index][0]
+    else:
+        title = "Nothing yet — use `!play <song>`"
+    if voice and voice.is_paused():
+        status = "⏸ Paused"
+    elif voice and voice.is_playing():
+        status = "▶ Playing"
+    else:
+        status = "⏹ Idle"
+    embed = discord.Embed(title=f"🎵 {title}", color=0x5865F2)
+    embed.add_field(name="Status", value=status, inline=True)
+    embed.add_field(name="Speed", value=f"{player.speed}x", inline=True)
+    if player.playlist:
+        embed.add_field(
+            name="Song", value=f"{player.index + 1} / {len(player.playlist)}", inline=True
+        )
+    if player.index + 1 < len(player.playlist):
+        embed.add_field(name="Up next", value=player.playlist[player.index + 1][0], inline=False)
+    return embed
+
+
+class PlayerView(discord.ui.View):
+    def __init__(self, guild_id):
+        super().__init__(timeout=None)
+        self.guild_id = guild_id
+        speed = get_player(guild_id).speed
+        for child in self.children:
+            if child.custom_id and child.custom_id.startswith("speed_"):
+                child.style = (
+                    discord.ButtonStyle.primary
+                    if int(child.custom_id.removeprefix("speed_")) == speed
+                    else discord.ButtonStyle.secondary
+                )
+
+    async def _player_ctx(self, interaction):
+        """Common guard: playback state must exist and the bot be in voice."""
+        player = get_player(self.guild_id)
+        if player.ctx is None or interaction.guild.voice_client is None:
+            await interaction.response.send_message(
+                "Nothing is playing — use `!play <song>` first.", ephemeral=True
+            )
+            return None, None
+        return player, player.ctx
+
+    @discord.ui.button(emoji="⏮", style=discord.ButtonStyle.secondary, custom_id="prev", row=0)
+    async def prev_button(self, interaction, button):
+        player, ctx = await self._player_ctx(interaction)
+        if player is None:
+            return
+        if player.index > 0:
+            await interaction.response.defer()
+            await play_index(ctx, player.index - 1)
+        else:
+            await interaction.response.send_message("No previous song.", ephemeral=True)
+
+    @discord.ui.button(emoji="⏯", style=discord.ButtonStyle.secondary, custom_id="pause", row=0)
+    async def pause_button(self, interaction, button):
+        player, ctx = await self._player_ctx(interaction)
+        if player is None:
+            return
+        await interaction.response.defer()
+        voice = ctx.guild.voice_client
+        if voice.is_paused():
+            voice.resume()
+        elif voice.is_playing():
+            voice.pause()
+        await refresh_player(ctx)
+
+    @discord.ui.button(emoji="⏭", style=discord.ButtonStyle.secondary, custom_id="next", row=0)
+    async def next_button(self, interaction, button):
+        player, ctx = await self._player_ctx(interaction)
+        if player is None:
+            return
+        if player.index + 1 < len(player.playlist):
+            await interaction.response.defer()
+            await play_index(ctx, player.index + 1)
+        else:
+            await interaction.response.send_message("No next song in the queue.", ephemeral=True)
+
+    @discord.ui.button(emoji="⏹", style=discord.ButtonStyle.danger, custom_id="stop", row=0)
+    async def stop_button(self, interaction, button):
+        player, ctx = await self._player_ctx(interaction)
+        if player is None:
+            return
+        await interaction.response.defer()
+        await disconnect_and_cleanup(ctx)
+
+    @discord.ui.button(label="1x", custom_id="speed_1", row=1)
+    async def speed1_button(self, interaction, button):
+        await self._set_speed(interaction, 1)
+
+    @discord.ui.button(label="2x", custom_id="speed_2", row=1)
+    async def speed2_button(self, interaction, button):
+        await self._set_speed(interaction, 2)
+
+    @discord.ui.button(label="3x", custom_id="speed_3", row=1)
+    async def speed3_button(self, interaction, button):
+        await self._set_speed(interaction, 3)
+
+    async def _set_speed(self, interaction, value):
+        player, ctx = await self._player_ctx(interaction)
+        if player is None:
+            return
+        await interaction.response.defer()
+        await set_speed(ctx, value)
+
+
+async def refresh_player(ctx):
+    """Render the player card as the newest message in the channel.
+
+    If the card is already the last message, edit it in place; otherwise
+    delete it and re-send at the bottom so the buttons never get buried
+    under queued-song chatter.
+    """
+    player = get_player(ctx.guild.id)
+    embed = build_embed(player, ctx.guild)
+    view = PlayerView(ctx.guild.id)
+    message = player.message
+    channel = ctx.channel
+    if message and message.channel.id == channel.id and channel.last_message_id == message.id:
+        try:
+            await message.edit(embed=embed, view=view)
+            return
+        except discord.HTTPException:
+            pass
+    if message:
+        try:
+            await message.delete()
+        except discord.HTTPException:
+            pass
+    player.message = await channel.send(embed=embed, view=view)
+
+
+async def set_speed(ctx, value: int):
+    player = get_player(ctx.guild.id)
+    if player.speed != value:
+        player.speed = value
+        voice = ctx.guild.voice_client
+        if voice and (voice.is_playing() or voice.is_paused()):
+            # restart the current song at the new speed
+            await play_index(ctx, player.index)
+            return
+    await refresh_player(ctx)
+
+
+async def disconnect_and_cleanup(ctx):
+    player = players.pop(ctx.guild.id, None)
+    if player:
+        player.generation += 1  # cancel any pending auto-advance
+        if player.message:
+            try:
+                await player.message.delete()
+            except discord.HTTPException:
+                pass
+        for _, path in player.playlist:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    voice = ctx.guild.voice_client
+    if voice:
+        await voice.disconnect()
 
 
 # Render sets RENDER_EXTERNAL_URL automatically; pinging our own public URL
@@ -152,10 +321,10 @@ async def on_ready():
 
 
 COMMANDS_MESSAGE = (
-    "🎵 **I'm here! Commands:**\n\n"
+    "🎵 **I'm here!** Use the buttons on the player card below, "
+    "or these commands:\n\n"
     "`!play <song or URL>` — play a song, or queue it if one is playing\n"
-    "`!next` (or `!skip`) — next song\n"
-    "`!prev` — previous song\n"
+    "`!next` (or `!skip`) / `!prev` — next / previous song\n"
     "`!speed 1|2|3` — playback speed (1x / 2x / 3x)\n"
     "`!pause` / `!resume` — pause / resume playback\n"
     "`!leave` — clear the queue and disconnect\n"
@@ -212,14 +381,16 @@ async def play_index(ctx, index: int):
             print(e)
 
     voice.play(source, after=after_playing)
-    speed_note = f" ({player.speed}x)" if player.speed != 1 else ""
-    await ctx.send(f"Now playing: **{title}**{speed_note}")
+    player.ctx = ctx
+    await refresh_player(ctx)
 
 
 async def advance(ctx):
     player = get_player(ctx.guild.id)
     if player.index + 1 < len(player.playlist):
         await play_index(ctx, player.index + 1)
+    else:
+        await refresh_player(ctx)  # end of queue: show idle state on the card
 
 
 @bot.command(name="play")
@@ -241,9 +412,10 @@ async def play(ctx, *, search: str):
 
     player = get_player(ctx.guild.id)
     player.playlist.append((title, path))
+    player.ctx = ctx
 
     if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
-        await ctx.send(f"Queued: **{title}**")
+        await refresh_player(ctx)  # card shows the updated queue at the bottom
     else:
         await play_index(ctx, len(player.playlist) - 1)
 
@@ -275,15 +447,7 @@ async def speed(ctx, value: int):
     if value not in SPEED_FILTERS:
         await ctx.send("Speed can be 1, 2 or 3 (e.g. `!speed 2`).")
         return
-    player = get_player(ctx.guild.id)
-    if player.speed == value:
-        await ctx.send(f"Already at {value}x.")
-        return
-    player.speed = value
-    await ctx.send(f"Speed set to **{value}x**.")
-    # Apply immediately by restarting the current song at the new speed
-    if ctx.voice_client and (ctx.voice_client.is_playing() or ctx.voice_client.is_paused()):
-        await play_index(ctx, player.index)
+    await set_speed(ctx, value)
 
 
 @speed.error
@@ -298,26 +462,20 @@ async def speed_error(ctx, error):
 async def pause(ctx):
     if ctx.voice_client and ctx.voice_client.is_playing():
         ctx.voice_client.pause()
+        await refresh_player(ctx)
 
 
 @bot.command(name="resume")
 async def resume(ctx):
     if ctx.voice_client and ctx.voice_client.is_paused():
         ctx.voice_client.resume()
+        await refresh_player(ctx)
 
 
 @bot.command(name="leave")
 async def leave(ctx):
     if ctx.voice_client:
-        player = players.pop(ctx.guild.id, None)
-        if player:
-            player.generation += 1  # cancel any pending auto-advance
-            for _, path in player.playlist:
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
-        await ctx.voice_client.disconnect()
+        await disconnect_and_cleanup(ctx)
 
 
 class HealthHandler(BaseHTTPRequestHandler):
