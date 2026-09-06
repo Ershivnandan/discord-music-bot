@@ -38,10 +38,17 @@ YDL_OPTIONS = {
 
 # YouTube bot-checks datacenter IPs, so direct YouTube links fail on the
 # server without logged-in cookies. Export a Netscape-format cookies.txt from
-# a browser and point YTDLP_COOKIES_FILE at it to enable YouTube there.
-_cookies_file = os.environ.get("YTDLP_COOKIES_FILE")
-if _cookies_file and os.path.isfile(_cookies_file):
-    YDL_OPTIONS["cookiefile"] = _cookies_file
+# a browser and point YTDLP_COOKIES_FILE at it, or place cookies.txt in the bot directory.
+_cookies_candidates = [
+    os.environ.get("YTDLP_COOKIES_FILE"),
+    os.path.join(os.getcwd(), "cookies.txt"),
+    "/app/cookies.txt",
+]
+for _candidate in _cookies_candidates:
+    if _candidate and os.path.isfile(_candidate):
+        YDL_OPTIONS["cookiefile"] = _candidate
+        break
+
 
 # ffmpeg's atempo filter caps at 2.0 per stage, so 3x chains two stages
 SPEED_FILTERS = {

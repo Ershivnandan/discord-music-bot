@@ -8,6 +8,8 @@ import aiohttp
 import yt_dlp
 
 from ..config import YDL_OPTIONS
+from .errors import DownloadError as BotDownloadError, YouTubeBlockedError
+from .logger import BotLogger
 
 YOUTUBE_URL_RE = re.compile(r"https?://(?:www\.|m\.|music\.)?(?:youtube\.com|youtu\.be)/")
 
@@ -17,32 +19,61 @@ class SongDownloader:
 
     def __init__(self, options: dict = YDL_OPTIONS):
         self.options = options
+        self.logger = BotLogger("downloader")
 
     def download(self, search: str):
-        with yt_dlp.YoutubeDL(self.options) as ydl:
-            info = ydl.extract_info(search, download=True)
-            if "entries" in info:  # came from a search
-                info = info["entries"][0]
-            return info.get("title", "Unknown title"), ydl.prepare_filename(info)
+        self.logger.info(f"Starting download for query/URL: {search}")
+        try:
+            with yt_dlp.YoutubeDL(self.options) as ydl:
+                info = ydl.extract_info(search, download=True)
+                if "entries" in info:  # came from a search
+                    info = info["entries"][0]
+                title = info.get("title", "Unknown title")
+                filename = ydl.prepare_filename(info)
+                self.logger.info(f"Download complete: {title} (saved to {filename})")
+                return title, filename
+        except yt_dlp.utils.DownloadError:
+            raise
+        except Exception as e:
+            raise BotDownloadError(f"Failed while downloading: {search}", detail=str(e)) from e
 
     async def download_async(self, search: str):
-        """Returns (title, path, used_fallback)."""
+        """Returns (title, path, used_fallback, blocked_error)."""
         try:
             # yt-dlp is blocking; run it off the event loop
             title, path = await asyncio.to_thread(self.download, search)
-            return title, path, False
+            return title, path, False, None
         except yt_dlp.utils.DownloadError as e:
+            err_raw = str(e).strip()
+            err_lines = [line.strip() for line in err_raw.splitlines() if line.strip()]
+            err_summary = err_lines[-1] if err_lines else err_raw
+            if "ERROR: [youtube]" in err_summary:
+                err_summary = err_summary.split("ERROR: [youtube]")[-1].strip(": ")
+
             # YouTube bot-checks datacenter IPs. oEmbed still answers from
             # them, so grab the video title and find the song on SoundCloud.
             title = await self._youtube_title(search)
             if title is None:
-                raise
-            print(f"[WARN] YouTube download failed for {search}: {e}\nFalling back to SoundCloud.")
+                self.logger.error(f"Failed to extract title via oEmbed for {search}: {e}", exc_info=True)
+                raise BotDownloadError(f"Unable to download '{search}'", detail=err_summary) from e
+
+            blocked_err = YouTubeBlockedError(detail=err_summary)
+            self.logger.warning(
+                f"YouTube download failed for {search}: {err_raw}. Falling back to SoundCloud search for title: {title}"
+            )
             # YouTube titles are noisy ("Song | Artist | Cast | Label"); the
             # first couple of segments search much better than the whole thing
             query = " ".join(part.strip() for part in title.split("|")[:2])
-            title, path = await asyncio.to_thread(self.download, f"scsearch:{query[:100]}")
-            return title, path, True
+            try:
+                title, path = await asyncio.to_thread(self.download, f"scsearch:{query[:100]}")
+                return title, path, True, blocked_err
+            except Exception as sc_err:
+                raise BotDownloadError(
+                    f"SoundCloud fallback search also failed for '{query[:100]}'",
+                    detail=str(sc_err),
+                ) from sc_err
+
+
 
     async def _youtube_title(self, url: str):
         if not YOUTUBE_URL_RE.match(url):

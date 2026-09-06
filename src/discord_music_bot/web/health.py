@@ -5,6 +5,8 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+from ..core.logger import BotLogger
+
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -20,8 +22,10 @@ class HealthHandler(BaseHTTPRequestHandler):
 class HealthServer:
     def __init__(self, port: int | None = None):
         self.port = port if port is not None else int(os.environ.get("PORT", 8080))
+        self.logger = BotLogger("health")
 
     def start(self):
         server = HTTPServer(("0.0.0.0", self.port), HealthHandler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
-        print(f"Health server listening on port {self.port}")
+        self.logger.info(f"Health server listening on port {self.port}")
+

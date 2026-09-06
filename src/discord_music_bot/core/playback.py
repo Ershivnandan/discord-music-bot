@@ -7,6 +7,9 @@ import discord
 
 from ..config import SPEED_FILTERS
 from ..ui.player_card import PlayerView, build_embed
+from .errors import PlaybackError, QueueError
+from .logger import BotLogger
+
 
 
 class GuildPlayer:
@@ -29,6 +32,8 @@ class PlaybackManager:
     def __init__(self, bot):
         self.bot = bot
         self.players = {}  # guild_id -> GuildPlayer
+        self.logger = BotLogger("playback")
+
 
     def get_player(self, guild_id) -> GuildPlayer:
         return self.players.setdefault(guild_id, GuildPlayer())
@@ -72,18 +77,29 @@ class PlaybackManager:
             voice.stop()
 
         title, path = player.playlist[index]
+        self.logger.info(
+            f"Starting playback: track {index + 1}/{len(player.playlist)}: '{title}' at {player.speed}x speed",
+            guild_id=ctx.guild.id,
+        )
         source = discord.FFmpegOpusAudio(path, options=SPEED_FILTERS[player.speed])
 
         def after_playing(error):
             if error:
-                print(f"Playback error: {error}")
+                pb_err = PlaybackError("Audio stream error occurred during playback", detail=str(error), guild_id=ctx.guild.id)
+                pb_err.log_with(self.logger)
             if generation != player.generation:
+                self.logger.debug(
+                    f"Skipping stale after_playing callback (generation {generation} vs {player.generation})",
+                    guild_id=ctx.guild.id,
+                )
                 return  # superseded by a manual next/prev/speed restart
             fut = asyncio.run_coroutine_threadsafe(self.advance(ctx), self.bot.loop)
             try:
                 fut.result()
             except Exception as e:
-                print(e)
+                advance_err = PlaybackError("Error during auto-advance to next track", detail=str(e), guild_id=ctx.guild.id)
+                advance_err.log_with(self.logger)
+
 
         voice.play(source, after=after_playing)
         player.ctx = ctx
@@ -92,13 +108,16 @@ class PlaybackManager:
     async def advance(self, ctx):
         player = self.get_player(ctx.guild.id)
         if player.index + 1 < len(player.playlist):
+            self.logger.info(f"Advancing to next track (index {player.index + 1})", guild_id=ctx.guild.id)
             await self.play_index(ctx, player.index + 1)
         else:
+            self.logger.info("Reached end of queue. Player is now idle.", guild_id=ctx.guild.id)
             await self.refresh_player(ctx)  # end of queue: show idle state on the card
 
     async def set_speed(self, ctx, value: int):
         player = self.get_player(ctx.guild.id)
         if player.speed != value:
+            self.logger.info(f"Playback speed changed from {player.speed}x to {value}x", guild_id=ctx.guild.id)
             player.speed = value
             voice = ctx.guild.voice_client
             if voice and (voice.is_playing() or voice.is_paused()):
@@ -108,6 +127,7 @@ class PlaybackManager:
         await self.refresh_player(ctx)
 
     async def disconnect_and_cleanup(self, ctx):
+        self.logger.info("Disconnecting from voice and cleaning up playlist cache.", guild_id=ctx.guild.id)
         player = self.players.pop(ctx.guild.id, None)
         if player:
             player.generation += 1  # cancel any pending auto-advance
@@ -119,8 +139,11 @@ class PlaybackManager:
             for _, path in player.playlist:
                 try:
                     os.remove(path)
-                except OSError:
-                    pass
+                    self.logger.debug(f"Removed temp file: {path}", guild_id=ctx.guild.id)
+                except OSError as e:
+                    self.logger.warning(f"Could not remove temp file {path}: {e}", guild_id=ctx.guild.id)
         voice = ctx.guild.voice_client
         if voice:
             await voice.disconnect()
+            self.logger.info("Voice connection closed.", guild_id=ctx.guild.id)
+
