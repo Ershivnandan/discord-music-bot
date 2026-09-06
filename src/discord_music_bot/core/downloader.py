@@ -26,13 +26,20 @@ class SongDownloader:
         try:
             with yt_dlp.YoutubeDL(self.options) as ydl:
                 info = ydl.extract_info(search, download=True)
+                if not info:
+                    raise BotDownloadError(f"No stream found for: {search}")
                 if "entries" in info:  # came from a search
-                    info = info["entries"][0]
+                    entries = [e for e in info.get("entries", []) if e]
+                    if not entries:
+                        raise BotDownloadError(f"No search results found for: {search}")
+                    info = entries[0]
                 title = info.get("title", "Unknown title")
                 filename = ydl.prepare_filename(info)
                 self.logger.info(f"Download complete: {title} (saved to {filename})")
                 return title, filename
         except yt_dlp.utils.DownloadError:
+            raise
+        except BotDownloadError:
             raise
         except Exception as e:
             raise BotDownloadError(f"Failed while downloading: {search}", detail=str(e)) from e
@@ -68,9 +75,10 @@ class SongDownloader:
                 title, path = await asyncio.to_thread(self.download, f"scsearch:{query[:100]}")
                 return title, path, True, blocked_err
             except Exception as sc_err:
+                sc_msg = getattr(sc_err, "detail", None) or str(sc_err)
                 raise BotDownloadError(
-                    f"SoundCloud fallback search also failed for '{query[:100]}'",
-                    detail=str(sc_err),
+                    f"YouTube blocked download ({err_summary}) and SoundCloud search found no match",
+                    detail=f"YouTube: {err_summary}\nSoundCloud fallback: {sc_msg}",
                 ) from sc_err
 
 

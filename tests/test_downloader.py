@@ -47,3 +47,19 @@ async def test_downloader_fallback_on_block(monkeypatch):
     assert used_fallback is True
     assert isinstance(blocked_err, YouTubeBlockedError)
     assert "Fallback Song" in title
+
+
+def test_empty_search_raises_download_error(monkeypatch):
+    downloader = SongDownloader()
+
+    class FakeYDL:
+        def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def extract_info(self, search, download=True):
+            return {"entries": []}
+
+    monkeypatch.setattr("yt_dlp.YoutubeDL", FakeYDL)
+    with pytest.raises(DownloadError) as exc_info:
+        downloader.download("scsearch:non_existent_track_xyz_12345")
+    assert "No search results found" in str(exc_info.value)
