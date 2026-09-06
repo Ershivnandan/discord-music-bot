@@ -31,14 +31,19 @@ YDL_OPTIONS = {
             "base_url": [os.environ.get("POT_PROVIDER_URL", "http://127.0.0.1:4416")]
         },
         "youtube": {
-            "player_client": ["web", "mweb", "android", "visionos"]
+            # Bypasses YouTube datacenter IP bot-check ("Sign in to confirm you're not a bot").
+            # Unauthenticated "web" client triggers hard BotGuard blocks on datacenter IPs;
+            # visionos and mweb with GVS PO tokens fetch audio without bot challenges.
+            "player_client": ["visionos", "mweb", "android_vr"]
         }
     },
 }
 
-# YouTube bot-checks datacenter IPs, so direct YouTube links fail on the
-# server without logged-in cookies. Export a Netscape-format cookies.txt from
-# a browser and point YTDLP_COOKIES_FILE at it, or place cookies.txt in the bot directory.
+# Optional proxy support (e.g. SOCKS5, HTTP, or Cloudflare WARP proxy)
+if os.environ.get("YTDLP_PROXY"):
+    YDL_OPTIONS["proxy"] = os.environ["YTDLP_PROXY"]
+
+# If a Netscape cookiefile is provided, we can safely use authenticated web clients.
 _cookies_candidates = [
     os.environ.get("YTDLP_COOKIES_FILE"),
     os.path.join(os.getcwd(), "cookies.txt"),
@@ -47,6 +52,12 @@ _cookies_candidates = [
 for _candidate in _cookies_candidates:
     if _candidate and os.path.isfile(_candidate):
         YDL_OPTIONS["cookiefile"] = _candidate
+        YDL_OPTIONS["extractor_args"]["youtube"]["player_client"] = [
+            "web",
+            "mweb",
+            "web_music",
+            "visionos",
+        ]
         break
 
 
