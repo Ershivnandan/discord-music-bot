@@ -29,6 +29,9 @@ YDL_OPTIONS = {
     "extractor_args": {
         "youtubepot-bgutilhttp": {
             "base_url": [os.environ.get("POT_PROVIDER_URL", "http://127.0.0.1:4416")]
+        },
+        "youtube": {
+            "player_client": ["android", "visionos", "web"]
         }
     },
 }
