@@ -27,6 +27,7 @@ class GuildPlayer:
         self.position = 0.0  # seconds into current track when playback started/speed changed
         self.play_start_time = None  # monotonic timestamp when playback started/resumed
         self.is_paused = False
+        self.loop_mode = "off"  # "off", "track", "queue"
 
     def get_current_position(self) -> float:
         """Calculate the current playback position in seconds."""
@@ -137,12 +138,35 @@ class PlaybackManager:
 
     async def advance(self, ctx):
         player = self.get_player(ctx.guild.id)
+        if not player.playlist:
+            return
+
+        if player.loop_mode == "track" and 0 <= player.index < len(player.playlist):
+            self.logger.info(f"Repeating current track (loop: track, index {player.index})", guild_id=ctx.guild.id)
+            await self.play_index(ctx, player.index)
+            return
+
         if player.index + 1 < len(player.playlist):
             self.logger.info(f"Advancing to next track (index {player.index + 1})", guild_id=ctx.guild.id)
             await self.play_index(ctx, player.index + 1)
+        elif player.loop_mode == "queue" and len(player.playlist) > 0:
+            self.logger.info("Looping queue back to track 1 (loop: queue)", guild_id=ctx.guild.id)
+            await self.play_index(ctx, 0)
         else:
             self.logger.info("Reached end of queue. Player is now idle.", guild_id=ctx.guild.id)
             await self.refresh_player(ctx)  # end of queue: show idle state on the card
+
+    def shuffle(self, guild_id) -> bool:
+        """Shuffle unplayed songs in the queue following the current track."""
+        player = self.get_player(guild_id)
+        unplayed = player.playlist[player.index + 1 :]
+        if len(unplayed) <= 1:
+            return False
+        import random
+        random.shuffle(unplayed)
+        player.playlist[player.index + 1 :] = unplayed
+        self.logger.info(f"Shuffled {len(unplayed)} upcoming tracks in queue", guild_id=guild_id)
+        return True
 
     async def pause(self, ctx):
         player = self.get_player(ctx.guild.id)

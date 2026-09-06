@@ -59,7 +59,12 @@ class Music(commands.Cog):
             await ctx.send(COMMANDS_MESSAGE)
 
         async with ctx.typing():
-            title, path, used_fallback, blocked_err = await self.downloader.download_async(search)
+            track, path, used_fallback, blocked_err = await self.downloader.download_async(search)
+
+        if hasattr(track, "requester"):
+            track.requester = ctx.author.display_name
+
+        title = track.title if hasattr(track, "title") else str(track)
 
         if used_fallback:
             reason = blocked_err.detail if blocked_err and blocked_err.detail else "Bot-check challenge"
@@ -72,7 +77,7 @@ class Music(commands.Cog):
             )
 
         player = self.playback.get_player(ctx.guild.id)
-        player.playlist.append((title, path))
+        player.playlist.append(track)
         player.ctx = ctx
         self.logger.info(
             f"Queued track: '{title}' (queue position {len(player.playlist)})",
@@ -92,6 +97,8 @@ class Music(commands.Cog):
         player = self.playback.get_player(ctx.guild.id)
         if player.index + 1 < len(player.playlist):
             await self.playback.play_index(ctx, player.index + 1)
+        elif getattr(player, "loop_mode", "off") == "queue" and len(player.playlist) > 0:
+            await self.playback.play_index(ctx, 0)
         else:
             raise QueueError("No next song in the queue.", guild_id=ctx.guild.id)
 
@@ -112,6 +119,68 @@ class Music(commands.Cog):
         if value not in SPEED_FILTERS:
             raise MusicBotError("Speed can only be 1, 2 or 3 (e.g. `!speed 2`).", code="ERR_INVALID_SPEED", guild_id=ctx.guild.id)
         await self.playback.set_speed(ctx, value)
+
+    @commands.command(name="shuffle")
+    async def shuffle(self, ctx):
+        self.logger.info(f"Command '!shuffle' invoked by {ctx.author}", guild_id=ctx.guild.id)
+        if self.playback.shuffle(ctx.guild.id):
+            await ctx.send("🔀 Shuffled the upcoming songs in the queue!")
+            await self.playback.refresh_player(ctx)
+        else:
+            raise QueueError("Not enough upcoming songs in the queue to shuffle.", guild_id=ctx.guild.id)
+
+    @commands.command(name="loop")
+    async def loop(self, ctx, mode: str = None):
+        self.logger.info(f"Command '!loop {mode}' invoked by {ctx.author}", guild_id=ctx.guild.id)
+        player = self.playback.get_player(ctx.guild.id)
+        if mode:
+            mode = mode.lower()
+            if mode in ("off", "track", "queue"):
+                player.loop_mode = mode
+            else:
+                raise MusicBotError("Loop mode must be `off`, `track`, or `queue`.", code="ERR_INVALID_LOOP", guild_id=ctx.guild.id)
+        else:
+            modes = ["off", "track", "queue"]
+            curr = getattr(player, "loop_mode", "off")
+            curr_idx = modes.index(curr) if curr in modes else 0
+            player.loop_mode = modes[(curr_idx + 1) % len(modes)]
+        await ctx.send(f"🔁 Loop mode set to: **{player.loop_mode.capitalize()}**")
+        await self.playback.refresh_player(ctx)
+
+    @commands.command(name="queue", aliases=["q"])
+    async def queue(self, ctx):
+        self.logger.info(f"Command '!queue' invoked by {ctx.author}", guild_id=ctx.guild.id)
+        player = self.playback.get_player(ctx.guild.id)
+        if not player.playlist:
+            await ctx.send("The queue is currently empty. Add songs with `!play <song>`!")
+            return
+
+        from ..ui.player_card import format_duration
+        import discord
+        embed = discord.Embed(
+            title=f"📜 Queue for {ctx.guild.name}",
+            color=0x5865F2,
+        )
+        lines = []
+        for i, item in enumerate(player.playlist):
+            title = getattr(item, "title", None) or (item[0] if isinstance(item, (tuple, list)) else str(item))
+            duration = getattr(item, "duration", None)
+            dur_str = f" `[{format_duration(duration)}]`" if duration else ""
+            if i == player.index:
+                lines.append(f"▶️ **{i + 1}. {title}**{dur_str} *(Now Playing)*")
+            elif i < player.index:
+                lines.append(f"⏮️ `{i + 1}.` ~~{title}~~{dur_str}")
+            else:
+                lines.append(f"`{i + 1}.` {title}{dur_str}")
+
+        if len(lines) > 15:
+            embed.description = "\n".join(lines[:15]) + f"\n\n*...and {len(lines) - 15} more tracks in queue*"
+        else:
+            embed.description = "\n".join(lines)
+
+        loop_mode = getattr(player, "loop_mode", "off").capitalize()
+        embed.set_footer(text=f"Total: {len(player.playlist)} songs • Loop Mode: {loop_mode}")
+        await ctx.send(embed=embed)
 
     @commands.command(name="pause")
     async def pause(self, ctx):

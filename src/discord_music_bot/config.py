@@ -73,12 +73,15 @@ SPEED_FILTERS = {
 KEEP_ALIVE_URL = os.environ.get("KEEP_ALIVE_URL") or os.environ.get("RENDER_EXTERNAL_URL")
 
 COMMANDS_MESSAGE = (
-    "🎵 **I'm here!** Use the buttons on the player card below, "
+    "🎵 **I'm here!** Use the interactive buttons on the player card below, "
     "or these commands:\n\n"
     "`!play <song or URL>` — play a song, or queue it if one is playing\n"
-    "`!next` (or `!skip`) / `!prev` — next / previous song\n"
-    "`!speed 1|2|3` — playback speed (1x / 2x / 3x)\n"
-    "`!pause` / `!resume` — pause / resume playback\n"
-    "`!leave` — clear the queue and disconnect\n"
-    "`!join` — pull me into your voice channel"
+    "`!pause` / `!resume` — pause or resume playback\n"
+    "`!next` (or `!skip`) / `!prev` — next or previous song\n"
+    "`!speed 1|2|3` — playback speed (1.0x / 2.0x / 3.0x)\n"
+    "`!loop [off|track|queue]` — set or cycle repeat mode\n"
+    "`!shuffle` — randomize upcoming queue tracks\n"
+    "`!queue` (or `!q`) — view upcoming songs\n"
+    "`!leave` — stop playback, clear queue and disconnect\n"
+    "`!join` — pull bot into your voice channel"
 )
