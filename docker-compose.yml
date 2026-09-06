@@ -17,7 +17,9 @@ services:
       - pot-provider
 
   # Generates YouTube PO tokens so downloads pass the bot-check that
-  # YouTube gives datacenter IPs. Only reachable from the bot container.
+  # YouTube gives datacenter IPs. Native multi-arch image (ARM64 + AMD64).
   pot-provider:
-    image: brainicism/bgutil-ytdlp-pot-provider
+    image: ghcr.io/jim60105/bgutil-pot:latest
     restart: unless-stopped
+    command: server --host 0.0.0.0 --port 4416
+

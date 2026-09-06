@@ -37,7 +37,7 @@ class SongDownloader:
             title = await self._youtube_title(search)
             if title is None:
                 raise
-            print(f"YouTube download failed, falling back to SoundCloud: {str(e)[:300]}")
+            print(f"[WARN] YouTube download failed for {search}: {e}\nFalling back to SoundCloud.")
             # YouTube titles are noisy ("Song | Artist | Cast | Label"); the
             # first couple of segments search much better than the whole thing
             query = " ".join(part.strip() for part in title.split("|")[:2])
