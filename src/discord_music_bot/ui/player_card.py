@@ -10,7 +10,8 @@ def build_embed(player, guild) -> discord.Embed:
     else:
         title = "Nothing yet — use `!play <song>`"
     if voice and voice.is_paused():
-        status = "⏸ Paused"
+        pos = int(player.get_current_position())
+        status = f"⏸ Paused ({pos // 60:02d}:{pos % 60:02d})"
     elif voice and voice.is_playing():
         status = "▶ Playing"
     else:
@@ -69,11 +70,12 @@ class PlayerView(discord.ui.View):
             return
         await interaction.response.defer()
         voice = ctx.guild.voice_client
-        if voice.is_paused():
-            voice.resume()
-        elif voice.is_playing():
-            voice.pause()
-        await self.playback.refresh_player(ctx)
+        if voice and voice.is_paused():
+            await self.playback.resume(ctx)
+        elif voice and voice.is_playing():
+            await self.playback.pause(ctx)
+        else:
+            await self.playback.refresh_player(ctx)
 
     @discord.ui.button(emoji="⏭", style=discord.ButtonStyle.secondary, custom_id="next", row=0)
     async def next_button(self, interaction, button):

@@ -117,15 +117,13 @@ class Music(commands.Cog):
     async def pause(self, ctx):
         self.logger.info(f"Command '!pause' invoked by {ctx.author}", guild_id=ctx.guild.id)
         if ctx.voice_client and ctx.voice_client.is_playing():
-            ctx.voice_client.pause()
-            await self.playback.refresh_player(ctx)
+            await self.playback.pause(ctx)
 
     @commands.command(name="resume")
     async def resume(self, ctx):
         self.logger.info(f"Command '!resume' invoked by {ctx.author}", guild_id=ctx.guild.id)
         if ctx.voice_client and ctx.voice_client.is_paused():
-            ctx.voice_client.resume()
-            await self.playback.refresh_player(ctx)
+            await self.playback.resume(ctx)
 
     @commands.command(name="leave")
     async def leave(self, ctx):
