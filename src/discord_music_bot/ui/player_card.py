@@ -33,6 +33,8 @@ def make_progress_bar(current_sec: float, total_sec: Optional[float], length: in
 
 def build_embed(player, guild) -> discord.Embed:
     """Build a professional, modern Discord player card embed."""
+    import time
+
     voice = guild.voice_client if guild else None
     current_pos = player.get_current_position()
 
@@ -70,29 +72,54 @@ def build_embed(player, guild) -> discord.Embed:
     url = getattr(item, "url", None)
     requester = getattr(item, "requester", None)
 
+    # Detect audio source for badge display
+    if url and ("youtube.com" in url or "youtu.be" in url):
+        source_badge = "🔴 `YouTube`"
+    elif url and "soundcloud.com" in url:
+        source_badge = "🟠 `SoundCloud`"
+    else:
+        source_badge = "📡 `Web Audio`"
+
     embed = discord.Embed(color=color)
 
-    # Author header with server/guild branding
+    # Author header with visual sound-wave indicator
     guild_icon = guild.icon.url if (guild and guild.icon) else None
-    embed.set_author(name="Now Playing", icon_url=guild_icon)
+    equalizer_icon = "ılı.lıllılı.ıllı" if (voice and voice.is_playing() and not voice.is_paused()) else "— — — —"
+    embed.set_author(name=f"Now Playing • [ {equalizer_icon} ]", icon_url=guild_icon)
 
-    # Description: song title link, artist badge, requester, and progress bar
+    # Description: song title, formatted metadata blockquote, and live progress bar
     desc_lines = []
     if url:
-        desc_lines.append(f"### 🎵 [{title}]({url})")
+        desc_lines.append(f"### 🎶 [{title}]({url})")
     else:
-        desc_lines.append(f"### 🎵 {title}")
+        desc_lines.append(f"### 🎶 {title}")
 
-    sub_badges = []
+    meta_badges = []
     if uploader:
-        sub_badges.append(f"👤 `{uploader}`")
+        meta_badges.append(f"👤 `{uploader}`")
     if requester:
-        sub_badges.append(f"🎧 `Requested by {requester}`")
-    if sub_badges:
-        desc_lines.append(" • ".join(sub_badges))
+        meta_badges.append(f"🎧 `Requested by {requester}`")
+    if meta_badges:
+        desc_lines.append(f"> {' • '.join(meta_badges)}")
 
+    desc_lines.append(f"> 📡 Source: {source_badge} • 🎚️ `48kHz Opus HQ`")
     desc_lines.append("")
-    desc_lines.append(make_progress_bar(current_pos, duration))
+
+    # High-fidelity progress bar with percentage and native relative timestamp
+    progress_bar = make_progress_bar(current_pos, duration)
+    if duration and duration > 0:
+        pct = int(min(1.0, max(0.0, current_pos / duration)) * 100)
+        if voice and voice.is_playing() and not voice.is_paused():
+            speed_mult = max(player.speed, 0.5)
+            remaining_seconds = max(0.0, (duration - current_pos) / speed_mult)
+            end_epoch = int(time.time() + remaining_seconds)
+            progress_line = f"{progress_bar} • **{pct}%** • Ends <t:{end_epoch}:R>"
+        else:
+            progress_line = f"{progress_bar} • **{pct}%**"
+    else:
+        progress_line = progress_bar
+
+    desc_lines.append(progress_line)
     embed.description = "\n".join(desc_lines)
 
     # Status badges
@@ -114,22 +141,26 @@ def build_embed(player, guild) -> discord.Embed:
         next_item = player.playlist[player.index + 1]
         next_title = getattr(next_item, "title", None) or (next_item[0] if isinstance(next_item, (tuple, list)) else str(next_item))
         next_url = getattr(next_item, "url", None)
+        next_dur = getattr(next_item, "duration", None)
+        next_dur_str = f" `[{format_duration(next_dur)}]`" if next_dur else ""
         next_md = f"[{next_title}]({next_url})" if next_url else f"**{next_title}**"
-        embed.add_field(name="⏭️ Up Next", value=f"`{player.index + 2}.` {next_md}", inline=False)
+        embed.add_field(name="⏭️ Up Next", value=f"`{player.index + 2}.` {next_md}{next_dur_str}", inline=False)
     elif loop_mode == "track":
         embed.add_field(name="🔂 Repeat", value="Repeating current track upon completion", inline=False)
     elif loop_mode == "queue" and len(player.playlist) > 1:
         first_item = player.playlist[0]
         first_title = getattr(first_item, "title", None) or (first_item[0] if isinstance(first_item, (tuple, list)) else str(first_item))
         first_url = getattr(first_item, "url", None)
+        first_dur = getattr(first_item, "duration", None)
+        first_dur_str = f" `[{format_duration(first_dur)}]`" if first_dur else ""
         first_md = f"[{first_title}]({first_url})" if first_url else f"**{first_title}**"
-        embed.add_field(name="🔁 Loop Queue", value=f"Loops back to `1.` {first_md}", inline=False)
+        embed.add_field(name="🔁 Loop Queue", value=f"Loops back to `1.` {first_md}{first_dur_str}", inline=False)
 
     # High-resolution thumbnail artwork
     if thumbnail:
         embed.set_thumbnail(url=thumbnail)
 
-    embed.set_footer(text="discord-music-bot • Use buttons below to control playback")
+    embed.set_footer(text="discord-music-bot • Live Audio Engine • Auto-refreshes every 5s")
     return embed
 
 

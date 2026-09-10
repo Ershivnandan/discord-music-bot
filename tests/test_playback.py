@@ -1,3 +1,4 @@
+import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -210,4 +211,51 @@ async def test_playback_manager_pause_and_resume():
         await manager.resume(ctx)
         assert player.is_paused is False
         voice.resume.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_progress_task_cancellation():
+    player = GuildPlayer()
+    task = asyncio.create_task(asyncio.sleep(10))
+    player.progress_task = task
+    assert not task.cancelled()
+
+    player.cancel_progress_task()
+    await asyncio.sleep(0)
+    assert task.cancelled()
+    assert player.progress_task is None
+
+
+@pytest.mark.asyncio
+async def test_progress_updater_edits_message(monkeypatch):
+    bot = MagicMock()
+    manager = PlaybackManager(bot)
+    ctx = MagicMock()
+    ctx.guild.id = 12345
+    voice = MagicMock()
+    voice.is_connected.return_value = True
+    voice.is_playing.return_value = True
+    ctx.guild.voice_client = voice
+
+    player = manager.get_player(12345)
+    player.playlist = [("Test Track", "test.opus")]
+    player.index = 0
+    player.generation = 1
+
+    mock_msg = AsyncMock()
+    player.message = mock_msg
+
+    import discord_music_bot.core.playback as pb_mod
+    monkeypatch.setattr(pb_mod, "PROGRESS_UPDATE_INTERVAL", 0.05)
+
+    # Start updater in background
+    task = asyncio.create_task(manager._progress_updater(ctx, player, generation=1))
+    await asyncio.sleep(0.12)  # Allow at least 1-2 ticks
+    assert mock_msg.edit.call_count >= 1
+
+    # Invalidate generation to stop loop
+    player.generation = 2
+    await asyncio.sleep(0.08)
+    assert task.done()
+
 

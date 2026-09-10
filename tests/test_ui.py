@@ -112,3 +112,43 @@ def test_player_view_button_layout_and_states():
 
     # Shuffle button enabled because 2 upcoming songs exist
     assert view.shuffle_button.disabled is False
+
+
+def test_build_embed_source_badges_and_countdown():
+    player = GuildPlayer()
+    track_yt = Track(
+        title="YouTube Song",
+        path="yt.opus",
+        duration=200.0,
+        url="https://www.youtube.com/watch?v=abcdef",
+        requester="Shiv",
+        uploader="Artist YT",
+    )
+    player.playlist = [track_yt]
+    player.index = 0
+    player.position = 50.0
+
+    guild = MagicMock()
+    guild.icon = None
+    voice = MagicMock()
+    voice.is_playing.return_value = True
+    voice.is_paused.return_value = False
+    guild.voice_client = voice
+
+    embed = build_embed(player, guild)
+    assert "🔴 `YouTube`" in embed.description
+    assert "ılı.lıllılı.ıllı" in embed.author.name
+    assert "25%" in embed.description
+    assert "Ends <t:" in embed.description
+
+    # Test SoundCloud source badge
+    track_sc = Track(
+        title="SC Song",
+        path="sc.opus",
+        duration=100.0,
+        url="https://soundcloud.com/artist/track",
+    )
+    player.playlist = [track_sc]
+    embed_sc = build_embed(player, guild)
+    assert "🟠 `SoundCloud`" in embed_sc.description
+

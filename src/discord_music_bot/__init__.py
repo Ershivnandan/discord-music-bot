@@ -18,6 +18,7 @@ def main() -> None:
         logger.error("DISCORD_TOKEN environment variable is not set.")
         raise SystemExit("DISCORD_TOKEN environment variable is not set.")
     patch_audio_player()
-    HealthServer().start()
-    MusicBot().run(token)
+    bot = MusicBot()
+    HealthServer(bot=bot).start()
+    bot.run(token)
 

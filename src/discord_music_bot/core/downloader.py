@@ -98,6 +98,42 @@ class SongDownloader:
 
     async def download_async(self, search: str):
         """Returns (track, path, used_fallback, blocked_error)."""
+        is_url = search.startswith(("http://", "https://"))
+        is_explicit_extractor = any(
+            search.startswith(p) for p in ("scsearch:", "ytsearch:", "ytsearch1:", "gvsearch:")
+        )
+
+        # 1. Plain text queries: attempt YouTube search first, fall back to SoundCloud
+        if not is_url and not is_explicit_extractor:
+            yt_query = f"ytsearch1:{search}"
+            try:
+                res = await asyncio.to_thread(self.download, yt_query)
+                track = res if isinstance(res, Track) else Track(title=res[0], path=res[1])
+                return track, track.path, False, None
+            except (yt_dlp.utils.DownloadError, BotDownloadError) as e:
+                err_raw = str(e).strip()
+                err_lines = [line.strip() for line in err_raw.splitlines() if line.strip()]
+                err_summary = err_lines[-1] if err_lines else err_raw
+                if "ERROR: [youtube]" in err_summary:
+                    err_summary = err_summary.split("ERROR: [youtube]")[-1].strip(": ")
+
+                blocked_err = YouTubeBlockedError(detail=err_summary)
+                self.logger.warning(
+                    f"YouTube search failed for '{search}': {err_raw}. Falling back to SoundCloud search."
+                )
+                sc_query = f"scsearch:{search[:100]}"
+                try:
+                    res = await asyncio.to_thread(self.download, sc_query)
+                    track = res if isinstance(res, Track) else Track(title=res[0], path=res[1])
+                    return track, track.path, True, blocked_err
+                except Exception as sc_err:
+                    sc_msg = getattr(sc_err, "detail", None) or str(sc_err)
+                    raise BotDownloadError(
+                        f"YouTube search failed ({err_summary}) and SoundCloud search found no match",
+                        detail=f"YouTube: {err_summary}\nSoundCloud fallback: {sc_msg}",
+                    ) from sc_err
+
+        # 2. URLs or explicit search queries
         try:
             # yt-dlp is blocking; run it off the event loop
             res = await asyncio.to_thread(self.download, search)

@@ -63,3 +63,43 @@ def test_empty_search_raises_download_error(monkeypatch):
     with pytest.raises(DownloadError) as exc_info:
         downloader.download("scsearch:non_existent_track_xyz_12345")
     assert "No search results found" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_plain_query_searches_youtube_first(monkeypatch):
+    downloader = SongDownloader()
+    queries_received = []
+
+    def mock_download(query):
+        queries_received.append(query)
+        return ("YouTube Track", "/tmp/yt.opus")
+
+    monkeypatch.setattr(downloader, "download", mock_download)
+
+    track, path, used_fallback, blocked_err = await downloader.download_async("Bohemian Rhapsody")
+    assert used_fallback is False
+    assert blocked_err is None
+    assert queries_received == ["ytsearch1:Bohemian Rhapsody"]
+    assert track.title == "YouTube Track"
+
+
+@pytest.mark.asyncio
+async def test_plain_query_falls_back_to_soundcloud_on_block(monkeypatch):
+    downloader = SongDownloader()
+    import yt_dlp.utils
+    queries_received = []
+
+    def mock_download(query):
+        queries_received.append(query)
+        if query.startswith("ytsearch"):
+            raise yt_dlp.utils.DownloadError("Sign in to confirm you're not a bot")
+        return ("SoundCloud Fallback Track", "/tmp/sc.opus")
+
+    monkeypatch.setattr(downloader, "download", mock_download)
+
+    track, path, used_fallback, blocked_err = await downloader.download_async("Bohemian Rhapsody")
+    assert used_fallback is True
+    assert isinstance(blocked_err, YouTubeBlockedError)
+    assert queries_received == ["ytsearch1:Bohemian Rhapsody", "scsearch:Bohemian Rhapsody"]
+    assert track.title == "SoundCloud Fallback Track"
+

@@ -6,7 +6,9 @@ import time
 
 import discord
 
-from ..config import SPEED_FILTERS
+from typing import Optional
+
+from ..config import PROGRESS_UPDATE_INTERVAL, SPEED_FILTERS
 from ..ui.player_card import PlayerView, build_embed
 from .errors import PlaybackError, QueueError
 from .logger import BotLogger
@@ -28,6 +30,13 @@ class GuildPlayer:
         self.play_start_time = None  # monotonic timestamp when playback started/resumed
         self.is_paused = False
         self.loop_mode = "off"  # "off", "track", "queue"
+        self.progress_task: Optional[asyncio.Task] = None
+
+    def cancel_progress_task(self):
+        """Cancel and clean up the background live progress updater."""
+        if self.progress_task and not self.progress_task.done():
+            self.progress_task.cancel()
+        self.progress_task = None
 
     def get_current_position(self) -> float:
         """Calculate the current playback position in seconds."""
@@ -85,11 +94,47 @@ class PlaybackManager:
                 pass
         player.message = await channel.send(embed=embed, view=view)
 
+    async def _progress_updater(self, ctx, player: GuildPlayer, generation: int):
+        """Periodically refreshes the player embed to reflect live progress."""
+        try:
+            while generation == player.generation:
+                await asyncio.sleep(PROGRESS_UPDATE_INTERVAL)
+                if generation != player.generation:
+                    break
+
+                voice = ctx.voice_client or (ctx.guild.voice_client if ctx.guild else None)
+                if not voice or not voice.is_connected():
+                    break
+                if not voice.is_playing():
+                    continue
+                if not player.message:
+                    continue
+
+                try:
+                    embed = build_embed(player, ctx.guild)
+                    await player.message.edit(embed=embed)
+                except discord.NotFound:
+                    player.message = None
+                    break
+                except discord.HTTPException as e:
+                    if getattr(e, "status", None) == 429:
+                        retry_after = 5.0
+                        if hasattr(e, "response") and hasattr(e.response, "headers"):
+                            retry_after = float(e.response.headers.get("Retry-After", 5.0))
+                        await asyncio.sleep(retry_after)
+                    else:
+                        self.logger.debug(f"HTTPException in progress updater: {e}", guild_id=ctx.guild.id)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            self.logger.debug(f"Unexpected error in progress updater: {e}", guild_id=ctx.guild.id)
+
     async def play_index(self, ctx, index: int, start_time: float = 0.0):
         """Start playing playlist[index], stopping whatever is on now."""
         player = self.get_player(ctx.guild.id)
         if not 0 <= index < len(player.playlist):
             return
+        player.cancel_progress_task()
         player.index = index
         player.generation += 1
         generation = player.generation
@@ -135,6 +180,12 @@ class PlaybackManager:
         voice.play(source, after=after_playing)
         player.ctx = ctx
         await self.refresh_player(ctx)
+        try:
+            player.progress_task = asyncio.create_task(
+                self._progress_updater(ctx, player, generation)
+            )
+        except RuntimeError:
+            pass
 
     async def advance(self, ctx):
         player = self.get_player(ctx.guild.id)
@@ -153,6 +204,7 @@ class PlaybackManager:
             self.logger.info("Looping queue back to track 1 (loop: queue)", guild_id=ctx.guild.id)
             await self.play_index(ctx, 0)
         else:
+            player.cancel_progress_task()
             self.logger.info("Reached end of queue. Player is now idle.", guild_id=ctx.guild.id)
             await self.refresh_player(ctx)  # end of queue: show idle state on the card
 
@@ -172,6 +224,7 @@ class PlaybackManager:
         player = self.get_player(ctx.guild.id)
         voice = ctx.voice_client or (ctx.guild.voice_client if ctx.guild else None)
         if voice and voice.is_playing():
+            player.cancel_progress_task()
             player.pause()
             voice.pause()
             self.logger.info(f"Playback paused at timestamp {player.position:.2f}s", guild_id=ctx.guild.id)
@@ -185,6 +238,13 @@ class PlaybackManager:
             voice.resume()
             self.logger.info(f"Playback resumed from timestamp {player.position:.2f}s", guild_id=ctx.guild.id)
             await self.refresh_player(ctx)
+            try:
+                player.cancel_progress_task()
+                player.progress_task = asyncio.create_task(
+                    self._progress_updater(ctx, player, player.generation)
+                )
+            except RuntimeError:
+                pass
 
     async def set_speed(self, ctx, value: int):
         player = self.get_player(ctx.guild.id)
@@ -210,6 +270,7 @@ class PlaybackManager:
         self.logger.info("Disconnecting from voice and cleaning up playlist cache.", guild_id=ctx.guild.id)
         player = self.players.pop(ctx.guild.id, None)
         if player:
+            player.cancel_progress_task()
             player.generation += 1  # cancel any pending auto-advance
             if player.message:
                 try:

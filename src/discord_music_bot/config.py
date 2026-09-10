@@ -13,13 +13,16 @@ load_dotenv()
 DOWNLOAD_DIR = os.path.join(tempfile.gettempdir(), "discord-music")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+DEFAULT_SEARCH_PROVIDER = os.environ.get("DEFAULT_SEARCH_PROVIDER", "ytsearch")
+PROGRESS_UPDATE_INTERVAL = int(os.environ.get("PROGRESS_UPDATE_INTERVAL", "5"))
+
 YDL_OPTIONS = {
     # Prefer progressive (non-HLS) streams: single small file, fast download
     "format": "bestaudio[protocol!*=m3u8]/bestaudio/best",
     "noplaylist": True,
     "quiet": True,
-    # SoundCloud search: unlike YouTube, it doesn't block server IPs
-    "default_search": "scsearch",
+    # Default search provider (ytsearch or scsearch)
+    "default_search": DEFAULT_SEARCH_PROVIDER,
     "outtmpl": os.path.join(DOWNLOAD_DIR, "%(id)s.%(ext)s"),
     # Throttle downloads so queueing a song mid-playback doesn't starve the
     # tiny instance's CPU/network and stall the audio thread
