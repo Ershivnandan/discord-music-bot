@@ -8,6 +8,8 @@ def test_unauthenticated_clients_bypass_botcheck():
     preventing YouTube's datacenter BotGuard check from aborting downloads."""
     clients = YDL_OPTIONS["extractor_args"]["youtube"]["player_client"]
     assert "web" not in clients
+    assert "tv" in clients
+    assert "web_embedded" in clients
     assert "visionos" in clients
     assert "mweb" in clients
     assert "android_vr" in clients
@@ -27,3 +29,4 @@ def test_proxy_configured(monkeypatch):
     if os.environ.get("YTDLP_PROXY"):
         options["proxy"] = os.environ["YTDLP_PROXY"]
     assert options.get("proxy") == test_proxy
+

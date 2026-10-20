@@ -36,8 +36,8 @@ YDL_OPTIONS = {
         "youtube": {
             # Bypasses YouTube datacenter IP bot-check ("Sign in to confirm you're not a bot").
             # Unauthenticated "web" client triggers hard BotGuard blocks on datacenter IPs;
-            # visionos and mweb with GVS PO tokens fetch audio without bot challenges.
-            "player_client": ["visionos", "mweb", "android_vr"]
+            # tv, web_embedded, visionos and mweb with GVS PO tokens fetch audio without bot challenges.
+            "player_client": ["tv", "web_embedded", "visionos", "mweb", "android_vr"]
         }
     },
 }
@@ -46,22 +46,48 @@ YDL_OPTIONS = {
 if os.environ.get("YTDLP_PROXY"):
     YDL_OPTIONS["proxy"] = os.environ["YTDLP_PROXY"]
 
-# If a Netscape cookiefile is provided, we can safely use authenticated web clients.
-_cookies_candidates = [
-    os.environ.get("YTDLP_COOKIES_FILE"),
-    os.path.join(os.getcwd(), "cookies.txt"),
-    "/app/cookies.txt",
-]
-for _candidate in _cookies_candidates:
-    if _candidate and os.path.isfile(_candidate):
-        YDL_OPTIONS["cookiefile"] = _candidate
-        YDL_OPTIONS["extractor_args"]["youtube"]["player_client"] = [
-            "web",
-            "mweb",
-            "web_music",
-            "visionos",
-        ]
-        break
+# Support cookies via file, raw text environment variable, or browser extraction
+_cookies_found = False
+
+if os.environ.get("YTDLP_COOKIES_TEXT"):
+    _cookies_path = os.path.join(DOWNLOAD_DIR, "cookies.txt")
+    try:
+        with open(_cookies_path, "w", encoding="utf-8") as _f:
+            _f.write(os.environ["YTDLP_COOKIES_TEXT"])
+        YDL_OPTIONS["cookiefile"] = _cookies_path
+        _cookies_found = True
+    except Exception:
+        pass
+elif os.environ.get("YTDLP_COOKIES_FROM_BROWSER"):
+    YDL_OPTIONS["cookiesfrombrowser"] = (os.environ["YTDLP_COOKIES_FROM_BROWSER"],)
+    _cookies_found = True
+else:
+    # If a Netscape cookiefile is provided, we can safely use authenticated web clients.
+    _cookies_candidates = [
+        os.environ.get("YTDLP_COOKIES_FILE"),
+        os.path.join(os.getcwd(), "cookies.txt"),
+        "/app/cookies.txt",
+    ]
+    for _candidate in _cookies_candidates:
+        if _candidate and os.path.isfile(_candidate):
+            YDL_OPTIONS["cookiefile"] = _candidate
+            _cookies_found = True
+            break
+
+if _cookies_found:
+    YDL_OPTIONS["extractor_args"]["youtube"]["player_client"] = [
+        "web",
+        "mweb",
+        "web_music",
+        "tv",
+        "visionos",
+    ]
+
+# Allow custom player_client override via environment variable if desired
+if os.environ.get("YTDLP_PLAYER_CLIENTS"):
+    YDL_OPTIONS["extractor_args"]["youtube"]["player_client"] = [
+        c.strip() for c in os.environ["YTDLP_PLAYER_CLIENTS"].split(",") if c.strip()
+    ]
 
 
 # ffmpeg's atempo filter caps at 2.0 per stage, so 3x chains two stages

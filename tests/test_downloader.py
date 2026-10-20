@@ -103,3 +103,55 @@ async def test_plain_query_falls_back_to_soundcloud_on_block(monkeypatch):
     assert queries_received == ["ytsearch1:Bohemian Rhapsody", "scsearch:Bohemian Rhapsody"]
     assert track.title == "SoundCloud Fallback Track"
 
+
+def test_generate_search_candidates():
+    from discord_music_bot.core.downloader import generate_search_candidates
+
+    title = "Dagabaaz Re (LYRICS) -  Dabangg 2 | Lyrical Bam Hindi"
+    candidates = generate_search_candidates(title)
+    assert "Dagabaaz Re - Dabangg 2" in candidates
+    assert "Dagabaaz Re Dabangg 2" in candidates
+    assert "Dagabaaz Re" in candidates
+    assert "Dabangg 2" in candidates
+
+    # Fluff stripping
+    title2 = "Coldplay - Viva La Vida (Official Music Video)"
+    candidates2 = generate_search_candidates(title2)
+    assert "Coldplay - Viva La Vida" in candidates2
+
+
+@pytest.mark.asyncio
+async def test_multi_candidate_soundcloud_fallback(monkeypatch):
+    downloader = SongDownloader()
+    import yt_dlp.utils
+
+    # First call (YouTube) fails with bot-check
+    # Second call (scsearch with first candidate) fails
+    # Third call (scsearch with cleaned candidate) succeeds
+    queries = []
+
+    def mock_download(query):
+        queries.append(query)
+        if "youtube.com" in query:
+            raise yt_dlp.utils.DownloadError("ERROR: [youtube] rSuVm402d_8: Sign in to confirm you're not a bot.")
+        if "first_unclean_query" in query:
+            raise DownloadError("No results found")
+        return ("Dagabaaz Re Dabangg 2", "/tmp/dabangg2.opus")
+
+    async def mock_oembed(url):
+        return {
+            "title": "Dagabaaz Re (LYRICS) -  Dabangg 2 | Lyrical Bam Hindi",
+            "author_name": "LYRICAL BAM HINDI",
+            "thumbnail_url": "https://example.com/thumb.jpg",
+        }
+
+    monkeypatch.setattr(downloader, "download", mock_download)
+    monkeypatch.setattr(downloader, "_youtube_oembed", mock_oembed)
+
+    track, path, used_fallback, blocked_err = await downloader.download_async("https://www.youtube.com/watch?v=rSuVm402d_8")
+    assert used_fallback is True
+    assert isinstance(blocked_err, YouTubeBlockedError)
+    assert "Dagabaaz Re Dabangg 2" in track.title
+    assert track.thumbnail == "https://example.com/thumb.jpg"
+
+

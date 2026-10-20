@@ -55,6 +55,62 @@ class Track:
         yield self.path
 
 
+def generate_search_candidates(title: str) -> list[str]:
+    """Generate prioritized search candidate queries from a video title.
+
+    Removes common YouTube metadata/fluff such as '(Official Music Video)',
+    '[LYRICS]', channel/uploader delimiters ('|', '•', '//'), etc.
+    """
+    candidates: list[str] = []
+
+    tag_pattern = re.compile(
+        r"[\(\[\{]"
+        r"(?:official\s+(?:music\s+)?video|official\s+audio|official|lyrics?|lyric\s+video|"
+        r"audio|visualizer|hd|4k|remastered|full\s+song|video\s+song|video|music\s+video|"
+        r"prod\.?[^\)\]\}]+)"
+        r"[\)\]\}]",
+        re.IGNORECASE,
+    )
+
+    # 1. Primary segment before '|', '•', '//', or '~'
+    primary = re.split(r"[\s]*[|•//~][\s]*", title)[0].strip()
+    cleaned_primary = tag_pattern.sub("", primary).strip()
+    cleaned_primary = re.sub(r"\s+", " ", cleaned_primary).strip(" -:")
+
+    if cleaned_primary and cleaned_primary not in candidates:
+        candidates.append(cleaned_primary)
+
+    # 2. If primary has ' - ', try combined without hyphen and isolated parts
+    if " - " in cleaned_primary:
+        without_hyphen = re.sub(r"\s+", " ", cleaned_primary.replace(" - ", " ")).strip()
+        if without_hyphen and without_hyphen not in candidates:
+            candidates.append(without_hyphen)
+        parts = cleaned_primary.split(" - ")
+        if len(parts) == 2:
+            p0, p1 = parts[0].strip(), parts[1].strip()
+            if p0 and len(p0) > 2 and p0 not in candidates:
+                candidates.append(p0)
+            if p1 and len(p1) > 2 and p1 not in candidates:
+                candidates.append(p1)
+
+    # 3. Clean full title without tags
+    cleaned_full = tag_pattern.sub("", title).strip()
+    cleaned_full = re.sub(r"\s+", " ", cleaned_full).strip(" -:")
+    if cleaned_full and cleaned_full not in candidates:
+        candidates.append(cleaned_full)
+
+    # 4. Old query format as a fallback
+    old_query = " ".join(part.strip() for part in title.split("|")[:2]).strip()
+    if old_query and old_query not in candidates:
+        candidates.append(old_query)
+
+    # 5. Raw title
+    if title and title not in candidates:
+        candidates.append(title)
+
+    return candidates
+
+
 class SongDownloader:
     """Downloads a song to the local cache directory before playback."""
 
@@ -96,6 +152,27 @@ class SongDownloader:
         except Exception as e:
             raise BotDownloadError(f"Failed while downloading: {search}", detail=str(e)) from e
 
+    async def _search_soundcloud_candidates(self, candidates: list[str]) -> Track:
+        """Try candidates sequentially on SoundCloud until one succeeds."""
+        last_err = None
+        for cand in candidates:
+            cand_clean = cand.strip()
+            if not cand_clean:
+                continue
+            sc_query = f"scsearch:{cand_clean[:100]}"
+            self.logger.info(f"Attempting SoundCloud fallback query: {sc_query}")
+            try:
+                res = await asyncio.to_thread(self.download, sc_query)
+                track = res if isinstance(res, Track) else Track(title=res[0], path=res[1])
+                return track
+            except Exception as err:
+                last_err = err
+                self.logger.warning(f"SoundCloud search for '{cand_clean}' failed: {err}")
+                continue
+        if last_err:
+            raise last_err
+        raise BotDownloadError("SoundCloud search found no match for any candidate query")
+
     async def download_async(self, search: str):
         """Returns (track, path, used_fallback, blocked_error)."""
         is_url = search.startswith(("http://", "https://"))
@@ -127,6 +204,16 @@ class SongDownloader:
                     track = res if isinstance(res, Track) else Track(title=res[0], path=res[1])
                     return track, track.path, True, blocked_err
                 except Exception as sc_err:
+                    alt_candidates = [
+                        c for c in generate_search_candidates(search)
+                        if c.lower() != search.lower()
+                    ]
+                    if alt_candidates:
+                        try:
+                            track = await self._search_soundcloud_candidates(alt_candidates)
+                            return track, track.path, True, blocked_err
+                        except Exception:
+                            pass
                     sc_msg = getattr(sc_err, "detail", None) or str(sc_err)
                     raise BotDownloadError(
                         f"YouTube search failed ({err_summary}) and SoundCloud search found no match",
@@ -158,10 +245,9 @@ class SongDownloader:
             self.logger.warning(
                 f"YouTube download failed for {search}: {err_raw}. Falling back to SoundCloud search for title: {title}"
             )
-            query = " ".join(part.strip() for part in title.split("|")[:2])
+            candidates = generate_search_candidates(title)
             try:
-                res = await asyncio.to_thread(self.download, f"scsearch:{query[:100]}")
-                track = res if isinstance(res, Track) else Track(title=res[0], path=res[1])
+                track = await self._search_soundcloud_candidates(candidates)
                 if oembed_meta:
                     if not track.thumbnail and oembed_meta.get("thumbnail_url"):
                         track.thumbnail = oembed_meta.get("thumbnail_url")
