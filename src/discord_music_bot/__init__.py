@@ -1,5 +1,3 @@
-"""Entry point for the discord-music-bot script."""
-
 import os
 
 from .bot import MusicBot
@@ -21,4 +19,3 @@ def main() -> None:
     bot = MusicBot()
     HealthServer(bot=bot).start()
     bot.run(token)
-

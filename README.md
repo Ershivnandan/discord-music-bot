@@ -20,7 +20,7 @@ A simple, lightweight Discord music bot using discord.py + yt-dlp. Plays audio f
 YouTube blocks datacenter IPs with "sign in to confirm you're not a bot" checks. The bot handles this in three layers:
 
 1. **PO tokens** — the `pot-provider` sidecar container (see `docker-compose.yml`) generates the tokens YouTube wants, so direct YouTube links work from server IPs without an account.
-2. **Cookies (optional)** — set `YTDLP_COOKIES_FILE` to a Netscape-format `cookies.txt` for logged-in access if PO tokens ever stop being enough.
+2. **Client bypass** — unauthenticated mobile/TV client profiles (`tv`, `web_embedded`, `visionos`, `mweb`, `android_vr`) avoid web BotGuard blocks without requiring cookies.
 3. **SoundCloud fallback** — if a YouTube download still fails, the bot looks up the video title via YouTube's oEmbed API (which isn't IP-blocked) and plays the closest SoundCloud match.
 
 Plain-text searches (`!play <song name>`) go straight to SoundCloud, which doesn't block server IPs.

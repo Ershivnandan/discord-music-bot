@@ -1,5 +1,3 @@
-"""The bot itself: wiring, events, and the keep-alive background task."""
-
 import aiohttp
 import discord
 from discord.ext import commands, tasks
@@ -38,4 +36,3 @@ class MusicBot(commands.Bot):
                     self.logger.info(f"Keep-alive ping status: {resp.status}")
         except Exception as e:
             self.logger.warning(f"Keep-alive ping failed: {e}")
-

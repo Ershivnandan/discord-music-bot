@@ -25,7 +25,7 @@ Every agent modifying or adding code to this project **must** adhere to the foll
 4. **YouTube Datacenter IP Bypass Resilience**:
    - YouTube blocks requests from datacenter IPs. The three-layer mitigation must remain intact:
      1. Proof-of-Origin (PO) token sidecar (`POT_PROVIDER_URL`).
-     2. Optional Netscape cookie file (`YTDLP_COOKIES_FILE`).
+     2. Unauthenticated mobile/TV client bypass (`tv`, `web_embedded`, `visionos`, `mweb`, `android_vr`).
      3. YouTube oEmbed fallback (`youtube.com/oembed`) + SoundCloud search (`scsearch`).
    - Plain text queries (`!play <song name>`) should default directly to SoundCloud (`scsearch`) to avoid bot checks.
 

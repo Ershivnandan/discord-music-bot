@@ -490,7 +490,6 @@ class HealthHandler(BaseHTTPRequestHandler):
             }
 
             if self.bot and hasattr(self.bot, "playback") and self.bot.playback.players:
-                # Find first active guild player
                 for guild_id, player in self.bot.playback.players.items():
                     if 0 <= player.index < len(player.playlist):
                         item = player.playlist[player.index]
@@ -545,7 +544,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Not Found")
 
     def log_message(self, format, *args):
-        pass  # keep logs clean
+        pass
 
 
 class HealthServer:

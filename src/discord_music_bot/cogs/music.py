@@ -1,12 +1,11 @@
-"""All user-facing music commands."""
-
-import yt_dlp
+import discord
 from discord.ext import commands
 
 from ..config import COMMANDS_MESSAGE, SPEED_FILTERS
 from ..core.downloader import SongDownloader
 from ..core.errors import DownloadError, MusicBotError, QueueError, VoiceChannelError, YouTubeBlockedError
 from ..core.logger import BotLogger
+from ..ui.player_card import format_duration
 
 
 class Music(commands.Cog):
@@ -18,7 +17,6 @@ class Music(commands.Cog):
 
     @commands.Cog.listener()
     async def on_command_error(self, ctx, error):
-        """Global error listener for Music commands, formatting MusicBotError embeds."""
         original = getattr(error, "original", error)
 
         if isinstance(original, MusicBotError):
@@ -29,7 +27,7 @@ class Music(commands.Cog):
             err.log_with(self.logger)
             await ctx.send(embed=err.to_embed())
         elif isinstance(error, commands.CommandNotFound):
-            pass  # ignore unknown commands
+            pass
         else:
             self.logger.error(f"Unhandled command error in '{ctx.command}': {error}", guild_id=ctx.guild.id, exc_info=True)
             err = MusicBotError("An unexpected error occurred while executing the command.", detail=str(error), guild_id=ctx.guild.id)
@@ -85,7 +83,7 @@ class Music(commands.Cog):
         )
 
         if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
-            await self.playback.refresh_player(ctx)  # card shows the updated queue at the bottom
+            await self.playback.refresh_player(ctx)
         else:
             await self.playback.play_index(ctx, len(player.playlist) - 1)
 
@@ -155,8 +153,6 @@ class Music(commands.Cog):
             await ctx.send("The queue is currently empty. Add songs with `!play <song>`!")
             return
 
-        from ..ui.player_card import format_duration
-        import discord
         embed = discord.Embed(
             title=f"📜 Queue for {ctx.guild.name}",
             color=0x5865F2,
@@ -199,5 +195,3 @@ class Music(commands.Cog):
         self.logger.info(f"Command '!leave' invoked by {ctx.author}", guild_id=ctx.guild.id)
         if ctx.voice_client:
             await self.playback.disconnect_and_cleanup(ctx)
-
-
